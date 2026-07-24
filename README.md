@@ -16,7 +16,7 @@ ttyforge bridge tcp://lab-host:5557             # remote port as a local tty
 ttyforge mux /dev/ttyUSB0 --link a.pty --link b.pty   # 1 port → N tools
 ```
 
-**Status: M1 done** — `pair` works (pyserial- and ZMODEM-verified). See [PLAN.md](PLAN.md) for the roadmap.
+**Status: M2 done** — `pair` (pyserial- and ZMODEM-verified) and `sim` (drives real serial-tether `exec`/`run`) work. See [PLAN.md](PLAN.md) for the roadmap.
 Sibling project: [serial-tether](https://github.com/hulryung/serial-tether)
 (daemon-based sharing of *real* ports; ttyforge forges the *virtual* side).
 

@@ -55,13 +55,17 @@ enum Cmd {
     /// and everything it prints to stdout comes back out of the port. Write
     /// the fake device in Python, the consumer never knows.
     Sim {
-        /// Built-in device behavior: echo | shell | uboot | at
-        #[arg(long, conflicts_with = "exec")]
+        /// Built-in device behavior.
+        #[arg(long, conflicts_with = "exec", value_parser = ["echo", "shell", "uboot", "at"])]
         preset: Option<String>,
-        /// Publish the port at this path; default: /tmp/ttyforge-<pid>.pty
+        /// Publish the port at this path; default: /tmp/ttyforge-sim.pty
+        /// (numbered -2, -3… if busy).
         #[arg(long, value_name = "PATH")]
         link: Option<String>,
-        /// Your device program; its stdio is the device side of the wire.
+        /// Your device program; its stdio is the device side of the wire
+        /// (stdin ← port, stdout → port; line-buffer beware: use `python3 -u`).
+        /// The port path is exported as $TTYFORGE_PTY. Exit status passes
+        /// through when the program ends.
         #[arg(last = true)]
         exec: Vec<String>,
     },
@@ -120,9 +124,15 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("ttyforge: {e:#}");
-            // Failures before the port was ready (pty/link creation) exit 3;
+            // A sim device program's own exit status passes through verbatim;
+            // failures before the port was ready (pty/link creation) exit 3;
             // anything after is a runtime error, exit 2.
-            if e.chain().any(|c| c.is::<forge::pty::SetupError>()) {
+            if let Some(forge::sim::ChildExit(code)) = e
+                .chain()
+                .find_map(|c| c.downcast_ref::<forge::sim::ChildExit>())
+            {
+                ExitCode::from((*code).clamp(0, 255) as u8)
+            } else if e.chain().any(|c| c.is::<forge::pty::SetupError>()) {
                 ExitCode::from(3)
             } else {
                 ExitCode::from(2)

@@ -107,12 +107,23 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
 - 테스트 7개: termios 플래그 고정, cooked 복구, sidecar 순수 로직,
   링크 정리, 256값 왕복(유닛) + 실바이너리 SIGTERM 정리·reopen 생존(통합)
 
-### M2 — `sim`
-- exec 백엔드 (자식 stdio 펌프) + preset 4종: echo / shell / uboot / at
-- preset `shell`·`uboot` 는 serial-tether 의 `exec`/`run` 통합 테스트가
-  실장비 없이 돌아갈 수준의 최소 구현 (tether 테스트 인프라로도 제공 가능)
-- **수용 기준**: `tether -D $(ttyforge sim --preset uboot)` 로
-  `tether exec "printenv"` 성공
+### M2 — `sim` ✅ (완료)
+- exec 백엔드 (자식 stdio 펌프, `$TTYFORGE_PTY` env, 종료코드 통과) +
+  preset 4종: echo / shell / uboot / at
+- 라인 디시플린(`LineDevice`): 입력 echo, CR/LF/CRLF 통일, backspace,
+  Ctrl-C — 실제 펌웨어 콘솔 동작 재현
+- 미니 hush/POSIX 셸: tether exec 래퍼가 요구하는 정확한 부분집합 —
+  `;` 체인, **인접 따옴표 연결**(`"BE""G"` → `BEG`, echo-split 트릭),
+  실행 시점 `$?` 확장, `$VAR` env 확장. uboot 는 printenv/setenv/
+  version/help + 기본 env(baudrate=115200 등), posix 는 not-found=127
+- **수용 기준 통과** (실제 tether 스택 전체 경유):
+  `tether -D <sim> exec "printenv baudrate"` → exit 0, 값 일치 /
+  `exec false` → exit 1 미러링 / unknown → exit 1 + U-Boot 오류 문구 /
+  `shell=uboot,prompt==> ` personality 로 `run "version"` 성공 /
+  `--json` 형태 (exit_code=0, output) 검증
+- 보너스 데모: python 가짜 센서(`-- python3 -u …`) ↔ pyserial 소비자
+  SCPI 풍 대화 성공
+- 테스트 20개 (유닛 14: 토크나이저/래퍼/디시플린 + 통합 6)
 
 ### M3 — `wire` (차별화 포인트)
 - `--baud-sim`(스루풋 스로틀) / `--latency` / `--jitter` / `--drop` /
