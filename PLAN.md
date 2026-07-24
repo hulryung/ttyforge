@@ -91,13 +91,21 @@ tether 에서 검증된 채로 이식하는 규칙 4가지 (`src/forge/pty.rs` �
 ### M0 — 스캐폴드 ✅ (완료)
 clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 설계 근거 기록.
 
-### M1 — pty 코어 + `pair`
-- `VirtualPort` 구조체: create(openpty+cfmakeraw) / read / write_all / 링크 관리
-- `pair`: 양방향 펌프, 준비 시 경로 2줄 출력
-- **수용 기준**: ① pyserial ↔ minicom 상호 대화 ② serial-tether 의
-  zmodem 루프백 테스트에서 socat 을 `ttyforge pair` 로 교체해
-  200 KB 양방향 바이트 일치 (dogfood — 이게 진짜 시험대)
-- 테스트: termios 플래그 단위 검증 + 바이너리 전체 값(0x00–0xFF) 왕복
+### M1 — pty 코어 + `pair` ✅ (완료)
+- `VirtualPort`(openpty+cfmakeraw, AsyncFd master, slave-keep) + `Link`
+  (symlink + `.pid` sidecar, stale reclaim, RAII 정리) + 방향별 독립 `pump`
+- 이식 중 발견한 **규칙 5** 추가: 소비자가 slave 를 cooked 로 바꾸면
+  500ms tick 에서 raw 재적용 (tether `reassert_raw_if_needed` 포트)
+- tether 데몬 브리지와의 의도적 차이: write timeout/drop 없음 — 페어는
+  방향당 피어가 하나뿐이라 커널 버퍼 backpressure 가 곧 올바른 와이어
+  동작 (데이터 무손실)
+- **수용 기준 통과**:
+  ① pyserial↔pyserial 1KB 전 바이트값 양방향 + reopen + baud no-op
+    (minicom 미설치로 pyserial 양단 대체)
+  ② zmodem 루프백에서 socat → `ttyforge pair` 교체, 200 KB 양방향
+    바이트 일치 (tetherd 가 한쪽을 tokio-serial 로 open — 그 경로까지 검증)
+- 테스트 7개: termios 플래그 고정, cooked 복구, sidecar 순수 로직,
+  링크 정리, 256값 왕복(유닛) + 실바이너리 SIGTERM 정리·reopen 생존(통합)
 
 ### M2 — `sim`
 - exec 백엔드 (자식 stdio 펌프) + preset 4종: echo / shell / uboot / at

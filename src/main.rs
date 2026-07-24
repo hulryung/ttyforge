@@ -42,8 +42,9 @@ enum Cmd {
     /// binary-safe for ZMODEM/XMODEM and firmware blobs, unlike `socat
     /// pty,raw`). Point pyserial at one end and minicom at the other.
     Pair {
-        /// Publish the two ends at these paths (repeat twice); default:
-        /// /tmp/ttyforge-<pid>-{a,b}.pty
+        /// Publish the two ends at these paths (repeat twice: side A, then
+        /// side B); default: /tmp/ttyforge-a.pty and /tmp/ttyforge-b.pty
+        /// (numbered -2, -3… if busy).
         #[arg(long, value_name = "PATH")]
         link: Vec<String>,
     },
@@ -119,7 +120,13 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("ttyforge: {e:#}");
-            ExitCode::from(2)
+            // Failures before the port was ready (pty/link creation) exit 3;
+            // anything after is a runtime error, exit 2.
+            if e.chain().any(|c| c.is::<forge::pty::SetupError>()) {
+                ExitCode::from(3)
+            } else {
+                ExitCode::from(2)
+            }
         }
     }
 }
