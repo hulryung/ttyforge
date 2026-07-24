@@ -1,0 +1,22 @@
+[package]
+name = "ttyforge"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Forge virtual serial ports: null-modem pairs, scripted device simulators, network bridges, and port multiplexers — a socat/ser2net replacement built for serial work."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hulryung/ttyforge"
+
+[dependencies]
+tokio = { version = "1.40", features = ["full"] }
+clap = { version = "4", features = ["derive", "env"] }
+anyhow = "1"
+libc = "0.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Planned (uncomment per milestone — see PLAN.md):
+# tokio-serial = "5.4"    # M5 mux: open the real port
+# rand = "0.8"            # M3 wire: fault injection (drop/corrupt)
+# serde = { version = "1", features = ["derive"] }  # M6: --json status output
+# serde_json = "1"
