@@ -13,9 +13,10 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
-use super::pty::{pump, Link, SetupError, VirtualPort};
+use super::pty::{Link, SetupError, VirtualPort};
+use super::wire::{pump, WireSpec};
 
-pub async fn run(link: Vec<String>) -> Result<()> {
+pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
     if !(link.is_empty() || link.len() == 2) {
         bail!("--link must be given exactly twice (side A, then side B), or not at all");
     }
@@ -46,8 +47,9 @@ pub async fn run(link: Vec<String>) -> Result<()> {
 
     let a = Arc::new(port_a);
     let b = Arc::new(port_b);
-    let ab = tokio::spawn(pump(a.clone(), b.clone()));
-    let ba = tokio::spawn(pump(b.clone(), a.clone()));
+    let (wire_ab, wire_ba) = wire.build_pair();
+    let ab = tokio::spawn(pump(a.clone(), b.clone(), wire_ab));
+    let ba = tokio::spawn(pump(b.clone(), a.clone(), wire_ba));
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .context("install SIGTERM handler")?;
@@ -100,8 +102,9 @@ mod tests {
         let (port_b, slave_b) = VirtualPort::create().expect("b");
         let a = Arc::new(port_a);
         let b = Arc::new(port_b);
-        let ab = tokio::spawn(pump(a.clone(), b.clone()));
-        let ba = tokio::spawn(pump(b.clone(), a.clone()));
+        let (wire_ab, wire_ba) = WireSpec::default().build_pair();
+        let ab = tokio::spawn(pump(a.clone(), b.clone(), wire_ab));
+        let ba = tokio::spawn(pump(b.clone(), a.clone(), wire_ba));
 
         let payload: Vec<u8> = (0u8..=255).cycle().take(1024).collect();
 

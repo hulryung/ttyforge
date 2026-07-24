@@ -12,7 +12,9 @@
 
 use anyhow::{bail, Result};
 
-pub async fn run(device: String, baud: u32, link: Vec<String>) -> Result<()> {
-    let _ = (device, baud, link);
+use super::wire::WireSpec;
+
+pub async fn run(device: String, baud: u32, link: Vec<String>, wire: WireSpec) -> Result<()> {
+    let _ = (device, baud, link, wire);
     bail!("`mux` lands in M5 — see PLAN.md");
 }

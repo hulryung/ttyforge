@@ -29,8 +29,51 @@ mod forge;
                   ready — one line per port, flushed — so scripts can capture them."
 )]
 struct Cli {
+    #[command(flatten)]
+    wire: WireArgs,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+/// The wire model — timing and fault injection applied to every forge, per
+/// direction. A pty is instant and perfect; a real UART is neither. These
+/// flags make the virtual wire honest so tests fail here instead of on
+/// hardware.
+#[derive(clap::Args, Debug)]
+#[command(next_help_heading = "Wire model (all forges)")]
+struct WireArgs {
+    /// Throttle throughput to this line rate (8N1 framing: baud/10 bytes/s).
+    #[arg(long, global = true, value_name = "BAUD")]
+    baud_sim: Option<u32>,
+    /// Fixed delivery delay per chunk (e.g. 5ms, 250us, 1.5s; bare = ms).
+    #[arg(long, global = true, value_name = "DUR", value_parser = forge::wire::parse_duration)]
+    latency: Option<std::time::Duration>,
+    /// Random extra delay, uniform in [0, JITTER].
+    #[arg(long, global = true, value_name = "DUR", value_parser = forge::wire::parse_duration)]
+    jitter: Option<std::time::Duration>,
+    /// Probability [0..=1] that a byte vanishes on the wire.
+    #[arg(long, global = true, value_name = "PROB", value_parser = forge::wire::parse_probability)]
+    drop: Option<f64>,
+    /// Probability [0..=1] that a byte arrives with one bit flipped.
+    #[arg(long, global = true, value_name = "PROB", value_parser = forge::wire::parse_probability)]
+    corrupt: Option<f64>,
+    /// RNG seed for --drop/--corrupt/--jitter; same seed replays the same
+    /// wire byte-for-byte. Auto-generated (and printed) if omitted.
+    #[arg(long, global = true, value_name = "N")]
+    seed: Option<u64>,
+}
+
+impl WireArgs {
+    fn to_spec(&self) -> forge::wire::WireSpec {
+        forge::wire::WireSpec {
+            baud: self.baud_sim,
+            latency: self.latency,
+            jitter: self.jitter,
+            drop: self.drop,
+            corrupt: self.corrupt,
+            seed: self.seed,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -106,6 +149,8 @@ fn main() -> ExitCode {
         .init();
 
     let cli = Cli::parse();
+    let mut wire = cli.wire.to_spec();
+    wire.resolve_seed();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -113,10 +158,10 @@ fn main() -> ExitCode {
 
     let result = rt.block_on(async {
         match cli.cmd {
-            Cmd::Pair { link } => forge::pair::run(link).await,
-            Cmd::Sim { preset, link, exec } => forge::sim::run(preset, link, exec).await,
-            Cmd::Bridge { endpoint, link } => forge::bridge::run(endpoint, link).await,
-            Cmd::Mux { device, baud, link } => forge::mux::run(device, baud, link).await,
+            Cmd::Pair { link } => forge::pair::run(link, wire).await,
+            Cmd::Sim { preset, link, exec } => forge::sim::run(preset, link, exec, wire).await,
+            Cmd::Bridge { endpoint, link } => forge::bridge::run(endpoint, link, wire).await,
+            Cmd::Mux { device, baud, link } => forge::mux::run(device, baud, link, wire).await,
         }
     });
 

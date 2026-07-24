@@ -15,6 +15,11 @@ libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+[dev-dependencies]
+# test-util enables tokio's paused clock (start_paused) so the wire's pacing
+# math is asserted exactly, without real sleeps.
+tokio = { version = "1.40", features = ["full", "test-util"] }
+
 # Planned (uncomment per milestone — see PLAN.md):
 # tokio-serial = "5.4"    # M5 mux: open the real port
 # rand = "0.8"            # M3 wire: fault injection (drop/corrupt)

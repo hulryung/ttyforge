@@ -30,6 +30,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 
 use super::pty::{Link, SetupError, VirtualPort};
+use super::wire::{deliver, WireSpec};
 
 /// Root error carrying an exec-backend child's nonzero exit status, so `main`
 /// can pass it through as the process exit code (like `tether pty -- CMD`).
@@ -44,7 +45,12 @@ impl std::fmt::Display for ChildExit {
 
 impl std::error::Error for ChildExit {}
 
-pub async fn run(preset: Option<String>, link: Option<String>, exec: Vec<String>) -> Result<()> {
+pub async fn run(
+    preset: Option<String>,
+    link: Option<String>,
+    exec: Vec<String>,
+    wire: WireSpec,
+) -> Result<()> {
     if preset.is_none() && exec.is_empty() {
         bail!("pick a device: --preset echo|shell|uboot|at, or `-- CMD ...` to run your own");
     }
@@ -67,7 +73,7 @@ pub async fn run(preset: Option<String>, link: Option<String>, exec: Vec<String>
                 "ttyforge: sim ready: {} (preset {name}, Ctrl-C to stop)",
                 link.path()
             );
-            preset_loop(port, &link, make_device(name)?).await
+            preset_loop(port, &link, make_device(name)?, wire).await
         }
         None => {
             eprintln!(
@@ -75,7 +81,7 @@ pub async fn run(preset: Option<String>, link: Option<String>, exec: Vec<String>
                 link.path(),
                 exec.join(" ")
             );
-            exec_loop(port, &link, exec).await
+            exec_loop(port, &link, exec, wire).await
         }
     }
 }
@@ -105,8 +111,15 @@ fn make_device(name: &str) -> Result<Box<dyn Device>> {
     })
 }
 
-async fn preset_loop(port: Arc<VirtualPort>, link: &Link, mut device: Box<dyn Device>) -> Result<()> {
-    port.write_all(&device.greeting())
+async fn preset_loop(
+    port: Arc<VirtualPort>,
+    link: &Link,
+    mut device: Box<dyn Device>,
+    wire: WireSpec,
+) -> Result<()> {
+    // Two wire directions: consumer→device and device→consumer.
+    let (mut wire_in, mut wire_out) = wire.build_pair();
+    deliver(&mut wire_out, &device.greeting(), &port)
         .await
         .context("write greeting")?;
 
@@ -121,8 +134,16 @@ async fn preset_loop(port: Arc<VirtualPort>, link: &Link, mut device: Box<dyn De
             r = port.read(&mut buf) => match r {
                 Ok(0) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
                 Ok(n) => {
-                    let out = device.feed(&buf[..n]);
-                    port.write_all(&out).await.context("write response")?;
+                    // Inbound bytes cross the wire (drop/corrupt/pacing)
+                    // before the device sees them; responses cross it again
+                    // on the way out.
+                    for cell in wire_in.plan(&buf[..n]) {
+                        tokio::time::sleep_until(cell.due).await;
+                        let out = device.feed(&cell.data);
+                        deliver(&mut wire_out, &out, &port)
+                            .await
+                            .context("write response")?;
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "port read failed");
@@ -150,8 +171,15 @@ async fn preset_loop(port: Arc<VirtualPort>, link: &Link, mut device: Box<dyn De
 /// `tether zmodem` lrzsz bridge with the direction inverted: there the child
 /// consumes the port, here the child *is* the device. Exits when the child
 /// does, passing its status through.
-async fn exec_loop(port: Arc<VirtualPort>, link: &Link, exec: Vec<String>) -> Result<()> {
+async fn exec_loop(
+    port: Arc<VirtualPort>,
+    link: &Link,
+    exec: Vec<String>,
+    wire: WireSpec,
+) -> Result<()> {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let (mut wire_in, mut wire_out) = wire.build_pair();
 
     let (prog, args) = exec.split_first().expect("exec non-empty (validated)");
     let mut child = tokio::process::Command::new(prog)
@@ -177,10 +205,18 @@ async fn exec_loop(port: Arc<VirtualPort>, link: &Link, exec: Vec<String>) -> Re
                 match port.read(&mut buf).await {
                     Ok(0) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
                     Ok(n) => {
-                        if child_stdin.write_all(&buf[..n]).await.is_err() {
-                            break; // child gone; wait() below reports it
+                        let mut dead = false;
+                        for cell in wire_in.plan(&buf[..n]) {
+                            tokio::time::sleep_until(cell.due).await;
+                            if child_stdin.write_all(&cell.data).await.is_err() {
+                                dead = true; // child gone; wait() below reports it
+                                break;
+                            }
+                            let _ = child_stdin.flush().await;
                         }
-                        let _ = child_stdin.flush().await;
+                        if dead {
+                            break;
+                        }
                     }
                     Err(_) => break,
                 }
@@ -197,7 +233,7 @@ async fn exec_loop(port: Arc<VirtualPort>, link: &Link, exec: Vec<String>) -> Re
                 match child_stdout.read(&mut buf).await {
                     Ok(0) => break, // child closed stdout
                     Ok(n) => {
-                        if port.write_all(&buf[..n]).await.is_err() {
+                        if deliver(&mut wire_out, &buf[..n], &port).await.is_err() {
                             break;
                         }
                     }

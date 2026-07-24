@@ -12,7 +12,9 @@
 
 use anyhow::{bail, Result};
 
-pub async fn run(endpoint: String, link: Option<String>) -> Result<()> {
-    let _ = (endpoint, link);
+use super::wire::WireSpec;
+
+pub async fn run(endpoint: String, link: Option<String>, wire: WireSpec) -> Result<()> {
+    let _ = (endpoint, link, wire);
     bail!("`bridge` lands in M4 — see PLAN.md");
 }

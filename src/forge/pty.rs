@@ -317,30 +317,9 @@ fn try_claim_link(link: &str, slave: &str) -> Result<bool> {
     }
 }
 
-/// Pump bytes from one port into another, forever. Transient errors are
-/// logged and retried; `Ok(0)` (no consumer attached) idles briefly. The
-/// deliberate difference from serial-tether's daemon bridge: no write
-/// timeout or chunk dropping — with a single peer per direction, kernel-
-/// buffer backpressure is *correct* wire behavior (a slow reader stalls the
-/// sender; no data is ever lost mid-pair).
-pub async fn pump(from: std::sync::Arc<VirtualPort>, to: std::sync::Arc<VirtualPort>) {
-    let mut buf = [0u8; 8192];
-    loop {
-        match from.read(&mut buf).await {
-            Ok(0) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
-            Ok(n) => {
-                if let Err(e) = to.write_all(&buf[..n]).await {
-                    tracing::warn!(error = %e, "pump write failed");
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "pump read failed");
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        }
-    }
-}
+// NOTE: the byte pump lives in `wire.rs` (`wire::pump`) — it is wire-aware
+// since M3, and an identity `WireSpec` degrades to the plain M1 behavior:
+// byte-for-byte, no added delay, kernel-buffer backpressure (never drops).
 
 #[cfg(test)]
 mod tests {
