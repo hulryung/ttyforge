@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 
-use super::pty::{Link, SetupError, VirtualPort};
+use super::pty::{Link, VirtualPort};
 use super::wire::{pump, WireSpec};
 
 pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
@@ -23,12 +23,9 @@ pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
 
     let (port_a, slave_a) = VirtualPort::create().context("side A")?;
     let (port_b, slave_b) = VirtualPort::create().context("side B")?;
-    let link_a = Link::claim(link.first().map(|s| s.as_str()), "a", &slave_a)
-        .context("side A")
-        .context(SetupError)?;
-    let link_b = Link::claim(link.get(1).map(|s| s.as_str()), "b", &slave_b)
-        .context("side B")
-        .context(SetupError)?;
+    // `Link::claim` tags its own failures as SetupError (exit 3).
+    let link_a = Link::claim(link.first().map(|s| s.as_str()), "a", &slave_a).context("side A")?;
+    let link_b = Link::claim(link.get(1).map(|s| s.as_str()), "b", &slave_b).context("side B")?;
 
     // Readiness contract: exactly two stdout lines (A then B), flushed, so
     // scripts can `{ read A; read B; } < <(ttyforge pair)`.

@@ -56,7 +56,7 @@ pub async fn run(
     }
 
     let (port, slave) = VirtualPort::create()?;
-    let link = Link::claim(link.as_deref(), "sim", &slave).context(SetupError)?;
+    let link = Link::claim(link.as_deref(), "sim", &slave)?;
 
     // Readiness contract: exactly one stdout line, flushed.
     {

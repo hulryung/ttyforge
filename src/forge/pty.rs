@@ -25,7 +25,7 @@
 
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use tokio::io::{unix::AsyncFd, Interest};
 
 /// Marker attachable to an anyhow chain (`.context(SetupError)`) so `main`
@@ -208,7 +208,12 @@ impl Link {
         let path = match explicit {
             Some(p) => {
                 if !try_claim_link(p, slave)? {
-                    bail!("--link {p} is busy (claimed by a live process)");
+                    // Tagged like every other claim failure so callers don't
+                    // have to re-tag (and double up the "setup failed:" text).
+                    return Err(anyhow::anyhow!(
+                        "--link {p} is busy (claimed by a live process)"
+                    ))
+                    .context(SetupError);
                 }
                 p.to_string()
             }

@@ -66,7 +66,16 @@ impl WireSpec {
     /// Two independent wires, one per direction, with decorrelated RNG
     /// streams (same seed still reproduces both).
     pub fn build_pair(&self) -> (Wire, Wire) {
-        (Wire::new(self, 0), Wire::new(self, 1))
+        self.build_pair_nth(0)
+    }
+
+    /// [`WireSpec::build_pair`] for the `n`th peer session of a forge that
+    /// outlives its peers (`bridge` re-accepts after a drop). Each session
+    /// gets its own decorrelated streams, and the same `--seed` still replays
+    /// every session byte-for-byte.
+    pub fn build_pair_nth(&self, session: u64) -> (Wire, Wire) {
+        let base = session.wrapping_mul(2);
+        (Wire::new(self, base), Wire::new(self, base.wrapping_add(1)))
     }
 }
 
@@ -208,6 +217,22 @@ pub async fn deliver(wire: &mut Wire, data: &[u8], port: &VirtualPort) -> std::i
         port.write_all(&cell.data).await?;
     }
     Ok(())
+}
+
+/// [`deliver`]'s schedule, for an end that isn't a pty — `bridge`'s TCP peer
+/// (and, later, anything else that is merely an `AsyncWrite`).
+pub async fn deliver_to<W>(wire: &mut Wire, data: &[u8], sink: &mut W) -> std::io::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt as _;
+    for cell in wire.plan(data) {
+        tokio::time::sleep_until(cell.due).await;
+        sink.write_all(&cell.data).await?;
+    }
+    // A TcpStream flush is a no-op, but a buffered sink would otherwise hold
+    // the cell past its due instant and quietly undo the pacing.
+    sink.flush().await
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -369,6 +394,33 @@ mod tests {
         let f: Vec<u8> = fwd.plan(&data).into_iter().flat_map(|c| c.data).collect();
         let r: Vec<u8> = rev.plan(&data).into_iter().flat_map(|c| c.data).collect();
         assert_ne!(f, r, "directions must be decorrelated");
+    }
+
+    /// `bridge` rebuilds its wires per peer session: a reconnect must not
+    /// replay the previous session's drops, but a given seed must still make
+    /// session N reproducible.
+    #[tokio::test(start_paused = true)]
+    async fn sessions_are_decorrelated_but_reproducible() {
+        let data: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
+        let plan_session = |n: u64| {
+            let (mut w, _) = spec(|s| {
+                s.drop = Some(0.05);
+                s.seed = Some(11);
+            })
+            .build_pair_nth(n);
+            w.plan(&data).into_iter().flat_map(|c| c.data).collect::<Vec<u8>>()
+        };
+        assert_eq!(plan_session(3), plan_session(3), "session 3 replays exactly");
+        assert_ne!(plan_session(1), plan_session(2), "each session is its own wire");
+        // Session 0 is what build_pair() gives — the two must stay identical
+        // so pair/sim behavior is unchanged.
+        let (mut legacy, _) = spec(|s| {
+            s.drop = Some(0.05);
+            s.seed = Some(11);
+        })
+        .build_pair();
+        let legacy: Vec<u8> = legacy.plan(&data).into_iter().flat_map(|c| c.data).collect();
+        assert_eq!(legacy, plan_session(0), "build_pair == build_pair_nth(0)");
     }
 
     #[tokio::test(start_paused = true)]

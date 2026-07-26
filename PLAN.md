@@ -147,12 +147,50 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
 - 배운 것: pty 커널 버퍼(~2-3KB)를 넘는 순차 write-then-read 테스트는
   backpressure 데드락 — writer 를 스레드로 분리해야 함
 
-### M4 — `bridge`
-- raw TCP (connect/listen, 피어 끊겨도 포트 유지·재수락)
-- M4b: RFC2217 클라이언트 (가상 포트의 termios 변경 → COM-PORT-OPTION),
-  ser2net 상호운용 테스트
-- **수용 기준**: `tetherd --tcp` ↔ `ttyforge bridge tcp://…` 로 원격
-  장비에 minicom 접속
+### M4 — `bridge` ✅ (M4a raw TCP 완료 / M4b RFC2217 미착수)
+- `tcp://HOST:PORT` 다이얼, `listen://[HOST]:PORT` 수락. 방향별 독립 태스크
+- **포트가 모든 피어보다 오래 산다**: 피어가 끊겨도 pty 는 그대로 —
+  listen 은 재수락, tcp 는 250ms→5s 백오프로 재다이얼. minicom 을 붙여둔
+  채 랩 호스트를 재부팅해도 경로가 유지된다
+- 피어 없는 동안 포트에 쓰인 바이트는 **버린다**(down wire). pair 는 커널
+  버퍼에 붙잡아 두지만(양단이 프로세스 시작부터 존재 → 대기가 유한),
+  TCP 피어 부재는 무기한이라 붙잡으면 ① 로컬 도구의 write 가 영구 블록
+  ② 다음 피어에게 몇 분 묵은 키입력이 쏟아진다
+- readiness 계약: listen 은 **bind 후에** 경로 출력(경로를 읽자마자
+  접속하는 스크립트가 지지 않게), tcp 는 피어를 기다리지 않고 출력
+  (부팅 중인 랩 호스트에서도 포트는 존재해야 한다)
+- 와이어 이식: 세션마다 `WireSpec::build_pair_nth(n)` — 재접속이 이전
+  세션의 드롭을 복제하지 않으면서 `--seed` 재현성은 유지. pty 가 아닌
+  sink 용 `wire::deliver_to`(AsyncWrite). TCP_NODELAY 필수 — Nagle 이
+  키입력을 뭉치고 와이어의 ~5ms 셀을 버스트로 뭉갠다
+- **수용 기준 (원안 수정)**: 원안의 `tetherd --tcp` 는 raw 바이트가 아니라
+  **NDJSON/JSON-RPC 2.0 + 토큰 인증**(tether `docs/PROTOCOL.md` §1–3)이라
+  raw 브리지로는 상호운용 자체가 불가능 — 전제가 틀린 기준이었다.
+  실제 raw 서버로 대체 검증(통과):
+  `ttyforge sim --preset uboot`(원격 보드) → `socat TCP-LISTEN:…
+  FILE:<pty>,rawer`(ser2net 역할) → `ttyforge bridge tcp://…` →
+  pyserial(minicom 대역)에서 version / printenv / setenv 왕복 성공
+- 곁다리로 고친 것: **exit 3 (setup error) 매핑이 처음부터 동작하지
+  않았다** — `e.chain().any(|c| c.is::<SetupError>())` 는 체인 프레임의
+  구체 타입이 anyhow 의 context 래퍼라 절대 매치되지 않아 모든 셋업 실패가
+  2 로 나갔다. `e.downcast_ref::<SetupError>()` 로 교체. 겸사겸사
+  `Link::claim` 이 자기 실패를 전부 SetupError 로 태그하게 하고 호출부의
+  중복 태그를 제거(“setup failed: setup failed:” 중복 출력도 사라짐)
+- 테스트 10개 (유닛 4: 엔드포인트 파싱·오입력 거부·백오프 상한 + 세션별
+  와이어 재현성 / 통합 6: 다이얼 바이트 투명성·SIGTERM 정리, listen 재수락
+  3회, 원격이 사라졌다 돌아올 때 재다이얼, 피어 없이 32KB 논블록 write,
+  `--baud-sim 9600` 페이싱이 브리지에도 적용, 셋업 실패 exit 3 + 준비 라인
+  없음)
+- 배운 것 ①: 완료된 `JoinHandle` 을 다시 폴하면 패닉("JoinHandle polled
+  after completion"). `select!` 로 한 방향이 끝나면 *다른* 쪽만 await 해야
+  한다 — 첫 피어 끊김에서 프로세스가 통째로 죽는 것을 통합 테스트가 잡음
+- 배운 것 ②: 테스트에서 "빈 포트를 얻고 놓았다가 다시 bind" 하는 패턴은
+  병렬 테스트끼리 같은 포트를 받아 `AddrInUse` 로 20% 플레이크. 바인드한
+  소켓에서 주소를 가져오거나(`:0`), 실패 시 재시도해야 한다
+
+### M4b — RFC2217 (미착수)
+- 가상 포트의 termios 변경 → telnet COM-PORT-OPTION, ser2net 상호운용 테스트
+- 착수 전 결정 필요: termios 폴링 vs TIOCPKT 이벤트 (§6)
 
 ### M5 — `mux`
 - ring buffer + 소비자별 cursor (tetherd/buffer.rs 패턴), TX 직렬화
@@ -175,7 +213,15 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
 
 ## 6. 리스크 / 열어둔 결정
 
-- **RFC2217 범위**: termios 폴링 vs TIOCPKT 이벤트 — M4 착수 시 결정.
+- **RFC2217 범위**: termios 폴링 vs TIOCPKT 이벤트 — M4b 착수 시 결정
+  (M4a 는 raw 바이트만 다루므로 이 결정 없이 완료됨).
+- **tether TCP 상호운용**: `tetherd --tcp` 는 raw 시리얼이 아니라 NDJSON/
+  JSON-RPC 2.0 + 토큰 인증이다. 붙이려면 `bridge` 가 아니라 별도의 "tether
+  클라이언트 모드"(hello/attach/send + data 알림 언랩)가 필요하다 — 할지
+  말지 열린 결정. 안 하면 `tether -D <dev>,pty` 가 이미 그 역할을 한다.
+- **반쪽 죽은 피어**: TCP keepalive 미설정(socket2 의존성 회피). 네트워크가
+  조용히 끊기면 세션이 FIN 없이 매달린다 — 실제 문제가 되면 M4b 에서
+  keepalive 또는 유휴 타임아웃 추가.
 - **preset 확장**: rhai/lua 스크립팅 요구가 생기면 M2 exec 백엔드로
   충분한지 재평가 (일단 "장치는 그냥 프로그램" 철학 유지).
 - **crate 분리**: pty 코어가 안정되면 `ttyforge-pty` 라이브러리로 분리해

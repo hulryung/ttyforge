@@ -119,7 +119,8 @@ enum Cmd {
     Bridge {
         /// Peer: tcp://HOST:PORT (connect) or listen://[HOST]:PORT (accept).
         endpoint: String,
-        /// Publish the port at this path; default: /tmp/ttyforge-<pid>.pty
+        /// Publish the port at this path; default: /tmp/ttyforge-bridge.pty
+        /// (numbered -2, -3… if busy).
         #[arg(long, value_name = "PATH")]
         link: Option<String>,
     },
@@ -177,7 +178,11 @@ fn main() -> ExitCode {
                 .find_map(|c| c.downcast_ref::<forge::sim::ChildExit>())
             {
                 ExitCode::from((*code).clamp(0, 255) as u8)
-            } else if e.chain().any(|c| c.is::<forge::pty::SetupError>()) {
+            // `downcast_ref`, not `chain().any(|c| c.is::<_>())`: a chain
+            // frame's concrete type is anyhow's context wrapper, never the
+            // context value, so the `is::<SetupError>()` form never matched
+            // and every setup failure exited 2.
+            } else if e.downcast_ref::<forge::pty::SetupError>().is_some() {
                 ExitCode::from(3)
             } else {
                 ExitCode::from(2)
