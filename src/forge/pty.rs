@@ -82,7 +82,21 @@ impl VirtualPort {
             )
         };
         if r != 0 {
-            return Err(std::io::Error::last_os_error()).context("openpty").context(SetupError);
+            // openpty() does not reliably set errno on failure — macOS turns a
+            // bare last_os_error() into nonsense like "Unknown error: -6" —
+            // and the overwhelmingly likely cause is simply running out of
+            // ptys, which the system caps (macOS: kern.tty.ptmx_max, 511 by
+            // default). Say that instead of printing a garbage errno.
+            let os = std::io::Error::last_os_error();
+            let detail = match os.raw_os_error() {
+                Some(code) if code > 0 => format!(" ({os})"),
+                _ => String::new(),
+            };
+            return Err(anyhow::anyhow!(
+                "openpty failed{detail} — the system may be out of ptys \
+                 (macOS: sysctl kern.tty.ptmx_max)"
+            ))
+            .context(SetupError);
         }
 
         // Resolve the slave device path (e.g. /dev/ttys012) to publish.
@@ -465,13 +479,17 @@ mod tests {
     /// one CI job doing both.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn slave_paths_resolve_under_concurrent_churn() {
+        // Concurrency is what reproduces the bug, not volume: ttyname_r failed
+        // ~90% of the time under it. Kept small on purpose — the system caps
+        // ptys (macOS: 511), and a greedier test starves the rest of the suite
+        // instead of testing anything.
         let mut tasks = Vec::new();
-        for _ in 0..8 {
+        for _ in 0..4 {
             // Report rather than panic: a panicking blocking task tears the
             // runtime down and the *next* port creation fails with a confusing
             // "context is shutting down" instead of the real cause.
             tasks.push(tokio::task::spawn_blocking(|| {
-                for _ in 0..40 {
+                for _ in 0..12 {
                     match VirtualPort::create() {
                         Ok((_port, name)) if name.starts_with("/dev/") => {}
                         Ok((_port, name)) => return Err(format!("implausible path {name:?}")),
