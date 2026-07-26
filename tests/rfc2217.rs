@@ -249,8 +249,20 @@ fn read_port_within(port: &std::fs::File, n: usize, within: Duration) -> Vec<u8>
     rx.recv_timeout(within).expect("timed out reading from the port").expect("read from port")
 }
 
-/// Configure the virtual port the way pyserial or minicom would.
-fn set_line_params(port: &std::fs::File, baud: libc::speed_t, cflag_bits: libc::tcflag_t) {
+/// Configure the virtual port the way pyserial or minicom would, and report
+/// what the pty *actually kept* — which is not the same thing.
+///
+/// Linux's pty driver normalises every `tcsetattr` with
+/// `c_cflag &= ~(CSIZE | PARENB); c_cflag |= CS8 | CREAD` (drivers/tty/pty.c),
+/// so data bits and parity simply cannot be expressed on a Linux virtual
+/// port; macOS keeps whatever you set. A forge can only relay what it can
+/// observe, so the expectations below are derived from the read-back rather
+/// than from what we asked for.
+fn set_line_params(
+    port: &std::fs::File,
+    baud: libc::speed_t,
+    cflag_bits: libc::tcflag_t,
+) -> libc::termios {
     let fd = port.as_raw_fd();
     let mut tio: libc::termios = unsafe { std::mem::zeroed() };
     assert_eq!(unsafe { libc::tcgetattr(fd, &mut tio) }, 0, "tcgetattr");
@@ -260,6 +272,9 @@ fn set_line_params(port: &std::fs::File, baud: libc::speed_t, cflag_bits: libc::
     }
     tio.c_cflag = (tio.c_cflag & !libc::CSIZE) | cflag_bits;
     assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &tio) }, 0, "tcsetattr");
+    let mut stored: libc::termios = unsafe { std::mem::zeroed() };
+    assert_eq!(unsafe { libc::tcgetattr(fd, &mut stored) }, 0, "tcgetattr");
+    stored
 }
 
 /// The M4b contract: what a tool sets on the virtual port becomes
@@ -272,27 +287,37 @@ fn rfc2217_relays_termios_changes_to_the_peer() {
     server.wait_connected();
 
     let port = open_port(&bridge.path);
-    set_line_params(
+    let stored = set_line_params(
         &port,
         libc::B9600,
         libc::CS7 | libc::PARENB | libc::PARODD | libc::CSTOPB | libc::CRTSCTS,
     );
+    // Everything the port kept must be relayed; anything it silently dropped
+    // must not be invented. On macOS that is all five commands, on Linux the
+    // three that survive its pty driver.
+    let kept_datasize = stored.c_cflag & libc::CSIZE == libc::CS7;
+    let kept_parity = stored.c_cflag & libc::PARENB != 0;
+    let want = 3 + kept_datasize as usize + kept_parity as usize;
 
-    let subnegs = server
-        .wait_until("all five settings", |s| (s.subnegs.len() >= 5).then(|| s.subnegs.clone()));
-    let get = |cmd: u8| {
-        subnegs
-            .iter()
-            .find(|(c, _)| *c == cmd)
-            .unwrap_or_else(|| panic!("no command {cmd} in {subnegs:?}"))
-            .1
-            .clone()
-    };
+    let subnegs = server.wait_until("the relayed settings", |s| {
+        (s.subnegs.len() >= want).then(|| s.subnegs.clone())
+    });
+    let got = |cmd: u8| subnegs.iter().find(|(c, _)| *c == cmd).map(|(_, p)| p.clone());
+    let get = |cmd: u8| got(cmd).unwrap_or_else(|| panic!("no command {cmd} in {subnegs:?}"));
+
     assert_eq!(get(SET_BAUDRATE), 9600u32.to_be_bytes(), "baud, big-endian");
-    assert_eq!(get(SET_DATASIZE), vec![7]);
-    assert_eq!(get(SET_PARITY), vec![2], "2 = odd");
     assert_eq!(get(SET_STOPSIZE), vec![2]);
     assert_eq!(get(SET_CONTROL), vec![3], "3 = hardware flow control");
+    if kept_datasize {
+        assert_eq!(get(SET_DATASIZE), vec![7]);
+    } else {
+        assert_eq!(got(SET_DATASIZE), None, "a port that forced CS8 must not claim CS7");
+    }
+    if kept_parity {
+        assert_eq!(get(SET_PARITY), vec![2], "2 = odd");
+    } else {
+        assert_eq!(got(SET_PARITY), None, "a port that dropped parity must not claim it");
+    }
 
     // An unchanged port must go quiet: no re-sending the same settings every
     // 100ms tick.
@@ -301,7 +326,7 @@ fn rfc2217_relays_termios_changes_to_the_peer() {
     assert_eq!(server.seen.lock().unwrap().subnegs.len(), count, "an idle port must stop talking");
 
     // And a later change sends only the field that moved.
-    set_line_params(
+    let _ = set_line_params(
         &port,
         libc::B19200,
         libc::CS7 | libc::PARENB | libc::PARODD | libc::CSTOPB | libc::CRTSCTS,
@@ -325,7 +350,7 @@ fn rfc2217_stream_stays_binary_transparent() {
     let port = open_port(&bridge.path);
     // Force settings traffic to interleave with the payload — the answers
     // come back mid-stream and must be invisible to the port.
-    set_line_params(&port, libc::B115200, libc::CS8);
+    let _ = set_line_params(&port, libc::B115200, libc::CS8);
 
     // Every byte value, with a run of IAC to catch off-by-one escaping.
     let mut payload: Vec<u8> = (0u8..=255).collect();

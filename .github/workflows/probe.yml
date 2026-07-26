@@ -22,9 +22,13 @@ jobs:
           print("PROBE CRTSCTS    =", bool(b[2] & termios.CRTSCTS))
           print("PROBE ispeed     =", b[4], "ospeed =", b[5], "(B9600=%s B38400=%s)" % (termios.B9600, termios.B38400))
           print("PROBE ICANON     =", bool(b[3] & termios.ICANON), "ECHO =", bool(b[3] & termios.ECHO))
-          # And does CS7 mask the 8th bit of transferred data?
+          # Does CS7 mask the 8th bit of transferred data? Read raw, and
+          # only what is actually there — the first attempt at this blocked
+          # forever because ICANON above makes a read wait for a newline.
+          a[3] &= ~(termios.ICANON | termios.ECHO)
+          termios.tcsetattr(s, termios.TCSANOW, a)
           os.write(m, bytes([0xFF, 0x80, 0x41]))
           import select
-          select.select([s], [], [], 1.0)
-          print("PROBE data through CS7 pty:", os.read(s, 8).hex())
+          got = os.read(s, 8) if select.select([s], [], [], 2.0)[0] else b""
+          print("PROBE data through the pty:", got.hex())
           PY

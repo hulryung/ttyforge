@@ -464,13 +464,23 @@ mod tests {
         tio.c_lflag |= libc::ICANON | libc::ECHO;
         assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &tio) }, 0);
 
+        // What the platform actually stored is the baseline, not what we
+        // asked for: a Linux pty normalises CSIZE back to CS8, a macOS one
+        // keeps CS7. The contract under test is "reassert doesn't touch the
+        // line parameters", so compare against reality on this machine —
+        // hard-coding CS7 tests the pty driver, not this function.
+        let before = port.termios().expect("termios");
+        assert_ne!(before.c_lflag & (libc::ICANON | libc::ECHO), 0, "test setup: cooked");
+
         assert!(port.reassert_line_discipline_if_needed(), "cooked slave is fixed");
         let after = port.termios().expect("termios");
         assert_eq!(after.c_lflag & (libc::ICANON | libc::ECHO), 0, "raw again");
-        assert_eq!(after.c_cflag & libc::CSIZE, libc::CS7, "CS7 kept");
-        assert!(after.c_cflag & libc::PARODD != 0, "odd parity kept");
-        assert!(after.c_cflag & libc::CSTOPB != 0, "two stop bits kept");
-        assert_eq!(unsafe { libc::cfgetospeed(&after) }, libc::B9600, "speed kept");
+        assert_eq!(after.c_cflag, before.c_cflag, "line parameters untouched");
+        assert_eq!(
+            unsafe { libc::cfgetospeed(&after) },
+            unsafe { libc::cfgetospeed(&before) },
+            "speed untouched"
+        );
 
         // …while plain rule 5 resets them to 8N1, which is what pair/sim want.
         assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &tio) }, 0);
