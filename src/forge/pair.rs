@@ -41,11 +41,7 @@ pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
         writeln!(stdout, "{}", link_b.path())?;
         stdout.flush()?;
     }
-    eprintln!(
-        "ttyforge: pair ready: {} <-> {} (Ctrl-C to stop)",
-        link_a.path(),
-        link_b.path()
-    );
+    eprintln!("ttyforge: pair ready: {} <-> {} (Ctrl-C to stop)", link_a.path(), link_b.path());
 
     let a = Arc::new(port_a);
     let b = Arc::new(port_b);

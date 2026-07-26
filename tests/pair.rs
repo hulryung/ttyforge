@@ -93,10 +93,7 @@ fn pair_bridges_bytes_and_cleans_up_on_sigterm() {
         }
     }
     for p in [&path_a, &path_b] {
-        assert!(
-            std::fs::symlink_metadata(p).is_err(),
-            "link {p} must be removed"
-        );
+        assert!(std::fs::symlink_metadata(p).is_err(), "link {p} must be removed");
         assert!(
             !std::path::Path::new(&format!("{p}.pid")).exists(),
             "sidecar {p}.pid must be removed"

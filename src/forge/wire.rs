@@ -50,8 +50,7 @@ impl WireSpec {
     /// If stochastic features are on but no seed was given, pick one and
     /// announce it on stderr — a failing CI run must always be replayable.
     pub fn resolve_seed(&mut self) {
-        let stochastic =
-            self.drop.is_some() || self.corrupt.is_some() || self.jitter.is_some();
+        let stochastic = self.drop.is_some() || self.corrupt.is_some() || self.jitter.is_some();
         if stochastic && self.seed.is_none() {
             let nanos = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -102,9 +101,7 @@ pub struct Wire {
 
 impl Wire {
     fn new(spec: &WireSpec, direction: u64) -> Self {
-        let byte_time = spec
-            .baud
-            .map(|b| Duration::from_secs_f64(10.0 / b as f64));
+        let byte_time = spec.baud.map(|b| Duration::from_secs_f64(10.0 / b as f64));
         let cell_bytes = match spec.baud {
             // ~5ms of bytes per cell, at least 1.
             Some(b) => std::cmp::max(1, (b as usize / 10) / 200),
@@ -118,9 +115,7 @@ impl Wire {
             drop_p: spec.drop.unwrap_or(0.0),
             corrupt_p: spec.corrupt.unwrap_or(0.0),
             rng: Rng::new(
-                spec.seed
-                    .unwrap_or(0)
-                    .wrapping_add(direction.wrapping_mul(0x9E37_79B9_7F4A_7C15)),
+                spec.seed.unwrap_or(0).wrapping_add(direction.wrapping_mul(0x9E37_79B9_7F4A_7C15)),
             ),
             cursor: Instant::now(),
         }
@@ -143,10 +138,7 @@ impl Wire {
             }
             let out = self.transform(chunk);
             if !out.is_empty() {
-                cells.push(Cell {
-                    data: out,
-                    due: self.cursor + lat,
-                });
+                cells.push(Cell { data: out, due: self.cursor + lat });
             }
         }
         cells
@@ -250,10 +242,8 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
     } else {
         (s, 1e-3) // bare number = milliseconds
     };
-    let n: f64 = num
-        .trim()
-        .parse()
-        .map_err(|_| format!("bad duration {s:?} (try 5ms, 250us, 1.5s)"))?;
+    let n: f64 =
+        num.trim().parse().map_err(|_| format!("bad duration {s:?} (try 5ms, 250us, 1.5s)"))?;
     if !n.is_finite() || n < 0.0 {
         return Err(format!("duration {s:?} must be non-negative"));
     }
@@ -262,9 +252,7 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 
 /// Parse a probability in [0, 1].
 pub fn parse_probability(s: &str) -> Result<f64, String> {
-    let p: f64 = s
-        .parse()
-        .map_err(|_| format!("bad probability {s:?} (0.0..=1.0)"))?;
+    let p: f64 = s.parse().map_err(|_| format!("bad probability {s:?} (0.0..=1.0)"))?;
     if !(0.0..=1.0).contains(&p) {
         return Err(format!("probability {p} out of range 0.0..=1.0"));
     }
@@ -325,10 +313,7 @@ mod tests {
         let total = last_due - start;
         let expect = Duration::from_secs_f64(1000.0 * 10.0 / 9600.0);
         let err = total.abs_diff(expect);
-        assert!(
-            err < Duration::from_millis(2),
-            "line time {total:?} vs expected {expect:?}"
-        );
+        assert!(err < Duration::from_millis(2), "line time {total:?} vs expected {expect:?}");
         // ~5ms cells: 1000 bytes at 960 B/s in 4-byte cells → many cells,
         // a stream rather than one burst.
         assert!(cells.len() > 100, "expected fine-grained cells, got {}", cells.len());
@@ -378,10 +363,7 @@ mod tests {
                 s.seed = Some(seed);
             })
             .build_pair();
-            w.plan(&data)
-                .into_iter()
-                .flat_map(|c| c.data)
-                .collect::<Vec<u8>>()
+            w.plan(&data).into_iter().flat_map(|c| c.data).collect::<Vec<u8>>()
         };
         assert_eq!(collect(42), collect(42), "same seed → identical wire");
         assert_ne!(collect(42), collect(43), "different seed → different wire");

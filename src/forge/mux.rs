@@ -80,10 +80,7 @@ pub async fn run(device: String, baud: u32, link: Vec<String>, wire: WireSpec) -
         }
         stdout.flush()?;
     }
-    eprintln!(
-        "ttyforge: mux ready: {device} @ {baud} -> {} port(s) (Ctrl-C to stop)",
-        links.len()
-    );
+    eprintln!("ttyforge: mux ready: {device} @ {baud} -> {} port(s) (Ctrl-C to stop)", links.len());
 
     // Device → every consumer (one copy each), and every consumer → device
     // (merged). `Arc<[u8]>` so the fan-out clones a refcount, not the bytes.
@@ -104,11 +101,7 @@ pub async fn run(device: String, baud: u32, link: Vec<String>, wire: WireSpec) -
             out,
             links[i].path().to_string(),
         )));
-        tasks.push(tokio::spawn(from_consumer(
-            port.clone(),
-            to_device.clone(),
-            back,
-        )));
+        tasks.push(tokio::spawn(from_consumer(port.clone(), to_device.clone(), back)));
     }
     // Our own handle would keep the device writer alive forever; the
     // consumers' clones are the ones that matter.

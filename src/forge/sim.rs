@@ -73,10 +73,7 @@ pub async fn run(
     let port = Arc::new(port);
     match preset.as_deref() {
         Some(name) => {
-            eprintln!(
-                "ttyforge: sim ready: {} (preset {name}, Ctrl-C to stop)",
-                link.path()
-            );
+            eprintln!("ttyforge: sim ready: {} (preset {name}, Ctrl-C to stop)", link.path());
             preset_loop(port, &link, make_device(name)?, wire, &mut shutdown).await
         }
         None => {
@@ -124,9 +121,7 @@ async fn preset_loop(
 ) -> Result<()> {
     // Two wire directions: consumer→device and device→consumer.
     let (mut wire_in, mut wire_out) = wire.build_pair();
-    deliver(&mut wire_out, &device.greeting(), &port)
-        .await
-        .context("write greeting")?;
+    deliver(&mut wire_out, &device.greeting(), &port).await.context("write greeting")?;
 
     let mut termios_tick = tokio::time::interval(std::time::Duration::from_millis(500));
     termios_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -306,11 +301,7 @@ struct LineDevice<H: LineHandler> {
 
 impl<H: LineHandler> LineDevice<H> {
     fn new(handler: H) -> Self {
-        Self {
-            line: Vec::new(),
-            last_was_cr: false,
-            handler,
-        }
+        Self { line: Vec::new(), last_was_cr: false, handler }
     }
 }
 
@@ -389,11 +380,7 @@ struct ShellHandler {
 
 impl ShellHandler {
     fn posix() -> Self {
-        Self {
-            kind: ShellKind::Posix,
-            env: std::collections::BTreeMap::new(),
-            last_status: 0,
-        }
+        Self { kind: ShellKind::Posix, env: std::collections::BTreeMap::new(), last_status: 0 }
     }
 
     fn uboot() -> Self {
@@ -410,11 +397,7 @@ impl ShellHandler {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
-        Self {
-            kind: ShellKind::Uboot,
-            env,
-            last_status: 0,
-        }
+        Self { kind: ShellKind::Uboot, env, last_status: 0 }
     }
 
     fn run_one(&mut self, cmd: &str) -> Vec<u8> {
@@ -458,9 +441,7 @@ impl ShellHandler {
                     self.last_status = 0;
                     for name in &words[1..] {
                         match self.env.get(name) {
-                            Some(v) => {
-                                out.extend_from_slice(format!("{name}={v}\r\n").as_bytes())
-                            }
+                            Some(v) => out.extend_from_slice(format!("{name}={v}\r\n").as_bytes()),
                             None => {
                                 out.extend_from_slice(
                                     format!("## Error: \"{name}\" not defined\r\n").as_bytes(),
@@ -561,8 +542,8 @@ fn expand_words(
     let mut has_content = false; // distinguishes `""` (empty word) from nothing
     let mut chars = cmd.chars().peekable();
 
-    let expand_dollar = |chars: &mut std::iter::Peekable<std::str::Chars>, cur: &mut String| {
-        match chars.peek() {
+    let expand_dollar =
+        |chars: &mut std::iter::Peekable<std::str::Chars>, cur: &mut String| match chars.peek() {
             Some('?') => {
                 chars.next();
                 cur.push_str(&last_status.to_string());
@@ -582,8 +563,7 @@ fn expand_words(
                 }
             }
             _ => cur.push('$'),
-        }
-    };
+        };
 
     while let Some(c) = chars.next() {
         match c {
@@ -649,9 +629,7 @@ mod tests {
             vec!["echo", "TETHEREXECBEGabc123"],
             "the echo-split trick must reassemble contiguously"
         );
-        assert_eq!(expand_words(r#"echo "a b" 'c d' e"#, &env, 0), vec![
-            "echo", "a b", "c d", "e"
-        ]);
+        assert_eq!(expand_words(r#"echo "a b" 'c d' e"#, &env, 0), vec!["echo", "a b", "c d", "e"]);
         assert_eq!(expand_words(r#"echo """#, &env, 0), vec!["echo", ""]);
     }
 
@@ -660,9 +638,7 @@ mod tests {
         let mut env = std::collections::BTreeMap::new();
         env.insert("baudrate".to_string(), "115200".to_string());
         assert_eq!(expand_words(r#"echo "st=$?""#, &env, 42), vec!["echo", "st=42"]);
-        assert_eq!(expand_words("echo $baudrate $missing", &env, 0), vec![
-            "echo", "115200"
-        ]);
+        assert_eq!(expand_words("echo $baudrate $missing", &env, 0), vec!["echo", "115200"]);
         assert_eq!(expand_words("echo '$?'", &env, 7), vec!["echo", "$?"], "single quotes literal");
     }
 

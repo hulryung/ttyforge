@@ -136,9 +136,7 @@ fn read_port_within(port: &std::fs::File, n: usize, within: Duration) -> Vec<u8>
         let mut got = vec![0u8; n];
         let _ = tx.send(fd.read_exact(&mut got).map(|()| got));
     });
-    rx.recv_timeout(within)
-        .expect("timed out reading from the port")
-        .expect("read from port")
+    rx.recv_timeout(within).expect("timed out reading from the port").expect("read from port")
 }
 
 /// Prove the session is fully up before measuring anything: the peer sends a
@@ -197,10 +195,7 @@ fn bridge_dials_a_peer_and_is_byte_transparent() {
             None => panic!("bridge did not exit within 5s of SIGTERM"),
         }
     }
-    assert!(
-        std::fs::symlink_metadata(&path).is_err(),
-        "link {path} must be removed"
-    );
+    assert!(std::fs::symlink_metadata(&path).is_err(), "link {path} must be removed");
     assert!(
         !std::path::Path::new(&format!("{path}.pid")).exists(),
         "sidecar {path}.pid must be removed"
@@ -270,10 +265,8 @@ fn bridge_redials_when_the_remote_returns() {
 #[test]
 fn setup_failures_exit_three_with_no_ready_line() {
     for endpoint in ["lab-host:5557", "tcp://lab-host", "listen://:0"] {
-        let out = Command::new(BIN)
-            .args(["bridge", endpoint])
-            .output()
-            .expect("run ttyforge bridge");
+        let out =
+            Command::new(BIN).args(["bridge", endpoint]).output().expect("run ttyforge bridge");
         assert_eq!(
             out.status.code(),
             Some(3),

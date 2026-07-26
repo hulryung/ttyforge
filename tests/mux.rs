@@ -34,9 +34,7 @@ fn fake_device() -> FakeDevice {
     // SAFETY: s is a valid tty fd; the buffer is sized.
     assert_eq!(unsafe { libc::ttyname_r(s, name.as_mut_ptr(), name.len()) }, 0);
     // SAFETY: ttyname_r NUL-terminated the buffer on success.
-    let path = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
+    let path = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) }.to_string_lossy().into_owned();
     // SAFETY: both fds come from openpty and are owned here.
     unsafe {
         FakeDevice {
@@ -108,9 +106,7 @@ fn read_within(f: &std::fs::File, n: usize, within: Duration) -> Vec<u8> {
         let mut got = vec![0u8; n];
         let _ = tx.send(fd.read_exact(&mut got).map(|()| got));
     });
-    rx.recv_timeout(within)
-        .expect("timed out reading")
-        .expect("read failed")
+    rx.recv_timeout(within).expect("timed out reading").expect("read failed")
 }
 
 /// The M5 acceptance gate: **every consumer gets a full copy**. The 200-byte

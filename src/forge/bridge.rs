@@ -143,10 +143,8 @@ async fn bridge_loop(port: Arc<VirtualPort>, mut peers: Peers, spec: WireSpec, r
     // What a freshly forged port looks like before any consumer touches it.
     // Every RFC2217 session diffs from here, so a peer that arrives late — or
     // second — is still told everything the consumer has chosen.
-    let pristine = port
-        .termios()
-        .map(|t| PortSettings::from_termios(&t))
-        .unwrap_or(PortSettings::UNSET);
+    let pristine =
+        port.termios().map(|t| PortSettings::from_termios(&t)).unwrap_or(PortSettings::UNSET);
     let mut session = 0u64;
     loop {
         // Keep the port drained while the wire is down (see module docs), and
@@ -473,9 +471,8 @@ impl Endpoint {
 /// Split `HOST:PORT` (or `[::1]:PORT`, or `:PORT`) and validate the port.
 /// The host half is returned unvalidated — resolution is the network's job.
 fn split_host_port(s: &str) -> Result<(&str, u16)> {
-    let (host, port) = s
-        .rsplit_once(':')
-        .ok_or_else(|| anyhow::anyhow!("endpoint {s:?} has no :PORT"))?;
+    let (host, port) =
+        s.rsplit_once(':').ok_or_else(|| anyhow::anyhow!("endpoint {s:?} has no :PORT"))?;
     let port: u16 = port
         .parse()
         .map_err(|_| anyhow::anyhow!("endpoint {s:?} has a bad port {port:?} (1..=65535)"))?;
@@ -498,9 +495,7 @@ impl Peers {
         Ok(match endpoint {
             Endpoint::Dial(addr) => Self::Dial(addr),
             Endpoint::Accept(addr) => Self::Accept(
-                TcpListener::bind(&addr)
-                    .await
-                    .with_context(|| format!("listen on {addr}"))?,
+                TcpListener::bind(&addr).await.with_context(|| format!("listen on {addr}"))?,
             ),
         })
     }
@@ -528,9 +523,7 @@ impl Peers {
                             // Loud once, quiet after: a lab host that is down
                             // for an hour shouldn't fill the terminal.
                             if attempt == 0 {
-                                eprintln!(
-                                    "ttyforge: connect to {addr} failed ({e}); retrying"
-                                );
+                                eprintln!("ttyforge: connect to {addr} failed ({e}); retrying");
                             } else {
                                 tracing::debug!(%addr, error = %e, ?wait, "connect failed");
                             }
@@ -580,23 +573,20 @@ mod tests {
             Endpoint::Accept("127.0.0.1:7000".into())
         );
         // IPv6 literals keep their brackets — rsplit_once(':') lands after ']'.
-        assert_eq!(
-            Endpoint::parse("tcp://[::1]:23").unwrap(),
-            Endpoint::Dial("[::1]:23".into())
-        );
+        assert_eq!(Endpoint::parse("tcp://[::1]:23").unwrap(), Endpoint::Dial("[::1]:23".into()));
     }
 
     #[test]
     fn endpoint_rejects_the_typos_that_would_silently_misbehave() {
         for bad in [
-            "lab-host:5557",          // no scheme
-            "serial://lab:5557",      // wrong scheme
-            "tcp://lab-host",         // no port
-            "tcp://lab-host:",        // empty port
-            "tcp://lab-host:0",       // port 0 is never meant literally
-            "tcp://lab-host:99999",   // out of range
-            "tcp://:5557",            // no host to dial
-            "tcp://lab-host:5557/x",  // stray path
+            "lab-host:5557",         // no scheme
+            "serial://lab:5557",     // wrong scheme
+            "tcp://lab-host",        // no port
+            "tcp://lab-host:",       // empty port
+            "tcp://lab-host:0",      // port 0 is never meant literally
+            "tcp://lab-host:99999",  // out of range
+            "tcp://:5557",           // no host to dial
+            "tcp://lab-host:5557/x", // stray path
         ] {
             assert!(Endpoint::parse(bad).is_err(), "{bad:?} must be rejected");
         }

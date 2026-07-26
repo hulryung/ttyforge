@@ -306,13 +306,7 @@ pub struct PortSettings {
 
 impl PortSettings {
     /// A freshly forged raw port: 8N1, no flow control, no speed chosen.
-    pub const UNSET: Self = Self {
-        baud: 0,
-        data_bits: 8,
-        parity: 1,
-        stop_bits: 1,
-        flow: 1,
-    };
+    pub const UNSET: Self = Self { baud: 0, data_bits: 8, parity: 1, stop_bits: 1, flow: 1 };
 
     pub fn from_termios(tio: &libc::termios) -> Self {
         // SAFETY: reads a field of a caller-owned, initialized termios.
@@ -439,10 +433,7 @@ mod tests {
         // A refusal is a state change, so it is answered once, and it turns
         // COM-PORT forwarding off.
         assert!(t.com_port_ok());
-        assert_eq!(
-            t.decode(&[IAC, DONT, OPT_COM_PORT]).reply,
-            vec![IAC, WONT, OPT_COM_PORT]
-        );
+        assert_eq!(t.decode(&[IAC, DONT, OPT_COM_PORT]).reply, vec![IAC, WONT, OPT_COM_PORT]);
         assert!(!t.com_port_ok(), "a refused option must stop the poller");
     }
 
@@ -450,14 +441,8 @@ mod tests {
     fn subnegotiation_params_are_escaped() {
         // 0x00FF0000 = 16711680: the encoding contains an IAC byte that must
         // be doubled, or the peer sees the subneg end early.
-        let cmds = PortSettings {
-            baud: 0,
-            ..settings(9600)
-        }
-        .commands_to(&PortSettings {
-            baud: 0x00FF_0000,
-            ..settings(9600)
-        });
+        let cmds = PortSettings { baud: 0, ..settings(9600) }
+            .commands_to(&PortSettings { baud: 0x00FF_0000, ..settings(9600) });
         assert_eq!(
             cmds,
             vec![vec![IAC, SB, OPT_COM_PORT, SET_BAUDRATE, 0x00, 0xFF, 0xFF, 0x00, 0x00, IAC, SE]]
@@ -478,13 +463,11 @@ mod tests {
 
         unsafe { libc::cfsetospeed(&mut tio, libc::B9600) };
         unsafe { libc::cfsetispeed(&mut tio, libc::B9600) };
-        tio.c_cflag = (tio.c_cflag & !libc::CSIZE) | libc::CS7 | libc::PARENB | libc::PARODD | libc::CSTOPB;
+        tio.c_cflag =
+            (tio.c_cflag & !libc::CSIZE) | libc::CS7 | libc::PARENB | libc::PARODD | libc::CSTOPB;
         tio.c_cflag |= libc::CRTSCTS;
         let s = PortSettings::from_termios(&tio);
-        assert_eq!(
-            s,
-            PortSettings { baud: 9600, data_bits: 7, parity: 2, stop_bits: 2, flow: 3 }
-        );
+        assert_eq!(s, PortSettings { baud: 9600, data_bits: 7, parity: 2, stop_bits: 2, flow: 3 });
         assert_eq!(s.describe(), "9600 7O2 rts/cts");
 
         // Even parity, software flow control.

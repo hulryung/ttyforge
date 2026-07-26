@@ -107,9 +107,7 @@ impl Server {
     }
 
     fn wait_connected(&self) {
-        self.connected
-            .recv_timeout(Duration::from_secs(5))
-            .expect("bridge never connected");
+        self.connected.recv_timeout(Duration::from_secs(5)).expect("bridge never connected");
     }
 
     /// Poll the recorded state until `f` is satisfied, then return it.
@@ -248,9 +246,7 @@ fn read_port_within(port: &std::fs::File, n: usize, within: Duration) -> Vec<u8>
         let mut got = vec![0u8; n];
         let _ = tx.send(fd.read_exact(&mut got).map(|()| got));
     });
-    rx.recv_timeout(within)
-        .expect("timed out reading from the port")
-        .expect("read from port")
+    rx.recv_timeout(within).expect("timed out reading from the port").expect("read from port")
 }
 
 /// Configure the virtual port the way pyserial or minicom would.
@@ -282,9 +278,8 @@ fn rfc2217_relays_termios_changes_to_the_peer() {
         libc::CS7 | libc::PARENB | libc::PARODD | libc::CSTOPB | libc::CRTSCTS,
     );
 
-    let subnegs = server.wait_until("all five settings", |s| {
-        (s.subnegs.len() >= 5).then(|| s.subnegs.clone())
-    });
+    let subnegs = server
+        .wait_until("all five settings", |s| (s.subnegs.len() >= 5).then(|| s.subnegs.clone()));
     let get = |cmd: u8| {
         subnegs
             .iter()
@@ -303,11 +298,7 @@ fn rfc2217_relays_termios_changes_to_the_peer() {
     // 100ms tick.
     let count = server.seen.lock().unwrap().subnegs.len();
     std::thread::sleep(Duration::from_millis(500));
-    assert_eq!(
-        server.seen.lock().unwrap().subnegs.len(),
-        count,
-        "an idle port must stop talking"
-    );
+    assert_eq!(server.seen.lock().unwrap().subnegs.len(), count, "an idle port must stop talking");
 
     // And a later change sends only the field that moved.
     set_line_params(
@@ -344,9 +335,8 @@ fn rfc2217_stream_stays_binary_transparent() {
     tx.write_all(&payload).expect("write");
     tx.flush().expect("flush");
 
-    let got = server.wait_until("the payload", |s| {
-        (s.data.len() >= payload.len()).then(|| s.data.clone())
-    });
+    let got = server
+        .wait_until("the payload", |s| (s.data.len() >= payload.len()).then(|| s.data.clone()));
     assert_eq!(got, payload, "peer must see the bytes un-escaped");
 
     // The server echoed it back escaped; the port must see it collapsed

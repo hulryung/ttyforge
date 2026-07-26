@@ -58,10 +58,7 @@ fn read_until(f: &mut std::fs::File, needle: &str) -> String {
             return String::from_utf8_lossy(&acc).into_owned();
         }
     }
-    panic!(
-        "timed out waiting for {needle:?}; got {:?}",
-        String::from_utf8_lossy(&acc)
-    );
+    panic!("timed out waiting for {needle:?}; got {:?}", String::from_utf8_lossy(&acc));
 }
 
 #[test]
@@ -116,8 +113,5 @@ fn exec_backend_passes_child_exit_status_through() {
         .expect("spawn");
     let status = child.wait().expect("wait");
     assert_eq!(status.code(), Some(7), "child status must pass through");
-    assert!(
-        std::fs::symlink_metadata(&path).is_err(),
-        "link cleaned up after child exit"
-    );
+    assert!(std::fs::symlink_metadata(&path).is_err(), "link cleaned up after child exit");
 }

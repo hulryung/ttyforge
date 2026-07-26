@@ -75,9 +75,7 @@ impl VirtualPort {
             )
         };
         if r != 0 {
-            return Err(std::io::Error::last_os_error())
-                .context("openpty")
-                .context(SetupError);
+            return Err(std::io::Error::last_os_error()).context("openpty").context(SetupError);
         }
 
         // Resolve the slave device path (e.g. /dev/ttys012) to publish.
@@ -105,9 +103,8 @@ impl VirtualPort {
                 .context(SetupError);
         }
         // SAFETY: ttyname_r NUL-terminated the buffer on success.
-        let slave_name = unsafe { std::ffi::CStr::from_ptr(name_buf.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
+        let slave_name =
+            unsafe { std::ffi::CStr::from_ptr(name_buf.as_ptr()) }.to_string_lossy().into_owned();
 
         // Non-blocking master so AsyncFd can drive it (rule 3).
         // SAFETY: master is a valid fd.
@@ -122,13 +119,7 @@ impl VirtualPort {
         let afd = AsyncFd::with_interest(master_owned, Interest::READABLE | Interest::WRITABLE)
             .context("AsyncFd for pty master")
             .context(SetupError)?;
-        Ok((
-            Self {
-                master: afd,
-                slave_keep: slave_owned,
-            },
-            slave_name,
-        ))
+        Ok((Self { master: afd, slave_keep: slave_owned }, slave_name))
     }
 
     /// Read whatever the consumer wrote into the port. `Ok(0)` means no
@@ -180,9 +171,8 @@ impl VirtualPort {
             return false;
         }
         // SAFETY: reads of an initialized termios we own.
-        let (cflag, ispeed, ospeed) = unsafe {
-            (tio.c_cflag, libc::cfgetispeed(&tio), libc::cfgetospeed(&tio))
-        };
+        let (cflag, ispeed, ospeed) =
+            unsafe { (tio.c_cflag, libc::cfgetispeed(&tio), libc::cfgetospeed(&tio)) };
         unsafe { libc::cfmakeraw(&mut tio) };
         if !reset_line_params {
             // Linux keeps the speed inside c_cflag, the BSDs in their own
@@ -241,10 +231,7 @@ pub(super) async fn read_fd(afd: &AsyncFd<OwnedFd>, buf: &mut [u8]) -> std::io::
     }
 }
 
-pub(super) async fn write_all_fd(
-    afd: &AsyncFd<OwnedFd>,
-    mut data: &[u8],
-) -> std::io::Result<()> {
+pub(super) async fn write_all_fd(afd: &AsyncFd<OwnedFd>, mut data: &[u8]) -> std::io::Result<()> {
     while !data.is_empty() {
         let mut guard = afd.writable().await?;
         let raw = afd.get_ref().as_raw_fd();
@@ -280,10 +267,8 @@ impl Link {
                 if !try_claim_link(p, slave)? {
                     // Tagged like every other claim failure so callers don't
                     // have to re-tag (and double up the "setup failed:" text).
-                    return Err(anyhow::anyhow!(
-                        "--link {p} is busy (claimed by a live process)"
-                    ))
-                    .context(SetupError);
+                    return Err(anyhow::anyhow!("--link {p} is busy (claimed by a live process)"))
+                        .context(SetupError);
                 }
                 p.to_string()
             }
@@ -305,9 +290,7 @@ impl Link {
         };
         if let Err(e) = std::fs::write(format!("{path}.pid"), std::process::id().to_string()) {
             let _ = std::fs::remove_file(&path);
-            return Err(e)
-                .with_context(|| format!("write {path}.pid"))
-                .context(SetupError);
+            return Err(e).with_context(|| format!("write {path}.pid")).context(SetupError);
         }
         Ok(Self { path })
     }
@@ -383,11 +366,7 @@ fn try_claim_link(link: &str, slave: &str) -> Result<bool> {
                 }
                 return Ok(false);
             }
-            Err(e) => {
-                return Err(e)
-                    .with_context(|| format!("symlink {link}"))
-                    .context(SetupError)
-            }
+            Err(e) => return Err(e).with_context(|| format!("symlink {link}")).context(SetupError),
         }
     }
 }
@@ -445,11 +424,8 @@ mod tests {
             libc::cfsetispeed(&mut tio, libc::B9600);
             libc::cfsetospeed(&mut tio, libc::B9600);
         }
-        tio.c_cflag = (tio.c_cflag & !libc::CSIZE)
-            | libc::CS7
-            | libc::PARENB
-            | libc::PARODD
-            | libc::CSTOPB;
+        tio.c_cflag =
+            (tio.c_cflag & !libc::CSIZE) | libc::CS7 | libc::PARENB | libc::PARODD | libc::CSTOPB;
         tio.c_lflag |= libc::ICANON | libc::ECHO;
         assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &tio) }, 0);
 
@@ -488,11 +464,8 @@ mod tests {
         let link = Link::claim(Some(path_s), "x", "/dev/null").expect("claim");
         assert_eq!(link.path(), path_s);
         assert!(path.symlink_metadata().is_ok(), "symlink exists");
-        let pid: i32 = std::fs::read_to_string(format!("{path_s}.pid"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let pid: i32 =
+            std::fs::read_to_string(format!("{path_s}.pid")).unwrap().trim().parse().unwrap();
         assert_eq!(pid as u32, std::process::id());
 
         // A second claim on the same path must refuse — we're alive.

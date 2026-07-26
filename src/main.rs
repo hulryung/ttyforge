@@ -152,8 +152,7 @@ enum Cmd {
 fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -161,10 +160,8 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let mut wire = cli.wire.to_spec();
     wire.resolve_seed();
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
+    let rt =
+        tokio::runtime::Builder::new_current_thread().enable_all().build().expect("tokio runtime");
 
     let result = rt.block_on(async {
         match cli.cmd {
@@ -184,9 +181,8 @@ fn main() -> ExitCode {
             // A sim device program's own exit status passes through verbatim;
             // failures before the port was ready (pty/link creation) exit 3;
             // anything after is a runtime error, exit 2.
-            if let Some(forge::sim::ChildExit(code)) = e
-                .chain()
-                .find_map(|c| c.downcast_ref::<forge::sim::ChildExit>())
+            if let Some(forge::sim::ChildExit(code)) =
+                e.chain().find_map(|c| c.downcast_ref::<forge::sim::ChildExit>())
             {
                 ExitCode::from((*code).clamp(0, 255) as u8)
             // `downcast_ref`, not `chain().any(|c| c.is::<_>())`: a chain

@@ -1,0 +1,6 @@
+# Closest canonical style to how this codebase was written by hand: keep short
+# expressions on one line instead of exploding every method chain. Everything
+# else is rustfmt's default, so `cargo fmt` is the arbiter and CI can enforce
+# it. Doc comments are left alone (wrap_comments is off by default) — the
+# "why" blocks in this repo are wrapped deliberately.
+use_small_heuristics = "Max"

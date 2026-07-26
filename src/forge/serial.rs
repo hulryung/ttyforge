@@ -32,9 +32,8 @@ pub struct SerialPort {
 
 impl SerialPort {
     pub fn open(path: &str, baud: u32) -> Result<Self> {
-        let speed = speed_of(baud).with_context(|| {
-            format!("baud {baud} has no termios constant on this platform")
-        })?;
+        let speed = speed_of(baud)
+            .with_context(|| format!("baud {baud} has no termios constant on this platform"))?;
 
         let c_path = std::ffi::CString::new(path)
             .with_context(|| format!("device path {path:?} contains a NUL"))
@@ -44,10 +43,7 @@ impl SerialPort {
         // device never becomes this process's controlling terminal.
         // SAFETY: c_path is a valid NUL-terminated string.
         let raw: RawFd = unsafe {
-            libc::open(
-                c_path.as_ptr(),
-                libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK,
-            )
+            libc::open(c_path.as_ptr(), libc::O_RDWR | libc::O_NOCTTY | libc::O_NONBLOCK)
         };
         if raw < 0 {
             return Err(std::io::Error::last_os_error())
@@ -224,9 +220,8 @@ mod tests {
 
     #[test]
     fn opening_a_non_tty_is_a_setup_error() {
-        let err = SerialPort::open("/dev/null", 115200)
-            .map(|_| ())
-            .expect_err("/dev/null is not a tty");
+        let err =
+            SerialPort::open("/dev/null", 115200).map(|_| ()).expect_err("/dev/null is not a tty");
         assert!(
             err.chain().any(|c| c.to_string().contains("not a tty")),
             "explain what's wrong: {err:#}"
