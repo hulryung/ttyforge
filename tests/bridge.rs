@@ -304,7 +304,7 @@ fn bridge_applies_the_wire_model() {
     writer.join().expect("writer thread");
 
     assert!(
-        elapsed >= Duration::from_millis(900) && elapsed <= Duration::from_millis(1500),
+        elapsed >= Duration::from_millis(900) && elapsed <= Duration::from_millis(2500),
         "1000 B at 9600 baud should take ≈1.04s over the bridge, took {elapsed:?}"
     );
     assert_eq!(got, vec![0xA5u8; 1000], "throttling must not alter bytes");

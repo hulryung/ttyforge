@@ -21,8 +21,103 @@ ttyforge mux /dev/ttyUSB0 --link a.pty --link b.pty   # 1 port → N tools
 ttyforge pair --baud-sim 9600 --latency 5ms --drop 0.001 --seed 42
 ```
 
-**Status: M5 done — every forge works** — `pair`, `sim`, `bridge` (raw TCP *and* RFC2217), `mux`, and the wire model (`--baud-sim`/`--latency`/`--jitter`/`--drop`/`--corrupt`/`--seed`) work; ZMODEM survives a seeded lossy wire via retransmission. The bridge outlives its peers — `listen://` re-accepts, `tcp://` redials with backoff, and the local path never goes away, so minicom survives a lab-host reboot. With `--rfc2217`, the baud/parity/framing a tool sets on the virtual port retunes the *real* UART at the far end (verified against pyserial's RFC2217 server). `mux` fans one real port out to N virtual ttys, and every consumer gets the whole RX stream — not a share of it. Packaging (M6) is what's left; see [PLAN.md](PLAN.md) for the roadmap.
+## Install
+
+```sh
+brew install hulryung/tap/ttyforge     # macOS / Linuxbrew
+cargo install ttyforge                 # anywhere with a Rust toolchain
+```
+
+## How a script drives it
+
+Every forge runs in the foreground and prints its port path(s) to stdout the
+moment they are usable — one line per port, flushed, then nothing else. That
+is the whole readiness protocol:
+
+```sh
+{ read A; read B; } < <(ttyforge pair)     # both ports exist by the time read returns
+```
+
+`--json` swaps those lines for one object, which adds what the plain form
+cannot say — including a seed that was generated for you, the one value that
+replays a lossy-wire failure:
+
+```sh
+$ ttyforge pair --json --drop 0.001
+{"forge":"pair","pid":4711,"ports":["/tmp/ttyforge-a.pty","/tmp/ttyforge-b.pty"],
+ "wire":{"drop":0.001,"seed":270278378129984}}
+```
+
+Ctrl-C or SIGTERM tears everything down and removes the symlinks. Exit codes:
+`0` clean, `1` usage, `2` runtime, `3` setup failed before the port existed —
+so a script that got a readiness line knows the port was real.
+
+## Recipes
+
+**Test a serial app with no hardware.** One end for your code, one for a fake
+device:
+
+```sh
+ttyforge pair --link /tmp/app.pty --link /tmp/dev.pty
+```
+
+**Make the fake device a program you write.** Its stdin is what the port
+receives, its stdout is what the port sends — so a board simulator is 20 lines
+of Python (use `python3 -u`; line buffering will otherwise eat your replies):
+
+```sh
+ttyforge sim --link /tmp/board.pty -- python3 -u fake_board.py
+```
+
+**Prove your retry logic works.** A real cable drops bytes; a pty never does.
+Same seed, same failure, every run:
+
+```sh
+ttyforge pair --baud-sim 9600 --drop 0.002 --seed 7
+```
+
+**Use a lab machine's port from your laptop.** Anything that serves a serial
+port as raw TCP works — ser2net, esp-link, `socat TCP-LISTEN:2000
+FILE:/dev/ttyUSB0,rawer`:
+
+```sh
+ttyforge bridge tcp://lab-host:2000 --link /tmp/board.pty
+```
+
+The port outlives the peer: reboot the lab machine and the bridge redials
+while minicom stays attached to the same path. Add `--rfc2217` and the
+baud/parity/framing your tool sets locally is applied to the *real* UART.
+
+**Watch a port while a script drives it.** Every consumer gets the whole RX
+stream, not a share of it:
+
+```sh
+ttyforge mux /dev/ttyUSB0 -b 115200 --link /tmp/monitor.pty --link /tmp/script.pty
+```
+
+## Status
+
+**M5 done — every forge works.** `pair`, `sim`, `bridge` (raw TCP *and*
+RFC2217), `mux`, and the wire model (`--baud-sim` / `--latency` / `--jitter` /
+`--drop` / `--corrupt` / `--seed`). ZMODEM survives a seeded lossy wire via
+retransmission; RFC2217 is verified against pyserial's RFC2217 server; the
+mux fan-out is verified against the exact 200-byte case that splits under a
+naive implementation. See [PLAN.md](PLAN.md) for the design log — every
+milestone records what it was measured against and what it got wrong.
+
 Sibling project: [serial-tether](https://github.com/hulryung/serial-tether)
 (daemon-based sharing of *real* ports; ttyforge forges the *virtual* side).
+Rule of thumb: if you need daemons, sessions, locking or remote clients, use
+tether; if you need a port that does not exist yet, use ttyforge.
 
-Unix only (macOS + Linux). MIT OR Apache-2.0.
+## Limits
+
+- **Unix only** (macOS + Linux). Windows virtual COM ports are a kernel-driver
+  problem (com0com territory), deliberately out of scope.
+- **A pty has no UART.** A baud rate set on a virtual port is a no-op locally —
+  `--baud-sim` simulates the timing, and `bridge --rfc2217` forwards the real
+  thing to a remote UART.
+- **DTR/RTS cannot be forwarded.** They are modem lines, and a pty has none to
+  observe.
+
+MIT OR Apache-2.0.

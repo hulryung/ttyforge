@@ -15,9 +15,10 @@ use anyhow::{bail, Context, Result};
 
 use super::pty::{Link, VirtualPort};
 use super::signals::Shutdown;
+use super::status;
 use super::wire::{pump, WireSpec};
 
-pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
+pub async fn run(link: Vec<String>, wire: WireSpec, json: bool) -> Result<()> {
     if !(link.is_empty() || link.len() == 2) {
         bail!("--link must be given exactly twice (side A, then side B), or not at all");
     }
@@ -32,15 +33,15 @@ pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
     // us immediately, and that must be a clean teardown (see `signals`).
     let mut shutdown = Shutdown::install()?;
 
-    // Readiness contract: exactly two stdout lines (A then B), flushed, so
-    // scripts can `{ read A; read B; } < <(ttyforge pair)`.
-    {
-        use std::io::Write as _;
-        let mut stdout = std::io::stdout().lock();
-        writeln!(stdout, "{}", link_a.path())?;
-        writeln!(stdout, "{}", link_b.path())?;
-        stdout.flush()?;
-    }
+    // Readiness contract: two stdout lines (A then B), flushed, so scripts
+    // can `{ read A; read B; } < <(ttyforge pair)`.
+    status::announce(
+        json,
+        "pair",
+        &[link_a.path(), link_b.path()],
+        serde_json::Value::Null,
+        &wire,
+    )?;
     eprintln!("ttyforge: pair ready: {} <-> {} (Ctrl-C to stop)", link_a.path(), link_b.path());
 
     let a = Arc::new(port_a);

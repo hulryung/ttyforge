@@ -31,6 +31,7 @@ use anyhow::{bail, Context, Result};
 
 use super::pty::{Link, SetupError, VirtualPort};
 use super::signals::Shutdown;
+use super::status;
 use super::wire::{deliver, WireSpec};
 
 /// Root error carrying an exec-backend child's nonzero exit status, so `main`
@@ -51,6 +52,7 @@ pub async fn run(
     link: Option<String>,
     exec: Vec<String>,
     wire: WireSpec,
+    json: bool,
 ) -> Result<()> {
     if preset.is_none() && exec.is_empty() {
         bail!("pick a device: --preset echo|shell|uboot|at, or `-- CMD ...` to run your own");
@@ -63,12 +65,11 @@ pub async fn run(
     let mut shutdown = Shutdown::install()?;
 
     // Readiness contract: exactly one stdout line, flushed.
-    {
-        use std::io::Write as _;
-        let mut stdout = std::io::stdout().lock();
-        writeln!(stdout, "{}", link.path())?;
-        stdout.flush()?;
-    }
+    let details = match preset.as_deref() {
+        Some(p) => serde_json::json!({ "preset": p }),
+        None => serde_json::json!({ "exec": exec }),
+    };
+    status::announce(json, "sim", &[link.path()], details, &wire)?;
 
     let port = Arc::new(port);
     match preset.as_deref() {

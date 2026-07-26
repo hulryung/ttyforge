@@ -34,6 +34,7 @@ use tokio::sync::{broadcast, mpsc};
 use super::pty::{Link, VirtualPort};
 use super::serial::{check_baud, SerialPort};
 use super::signals::Shutdown;
+use super::status;
 use super::wire::{deliver, Wire, WireSpec};
 
 /// Idle nap when a port reports "no consumer attached" (`Ok(0)`), and the
@@ -52,7 +53,13 @@ const BACKLOG: usize = 256;
 /// only delay the moment a stuck device becomes visible.
 const TX_QUEUE: usize = 64;
 
-pub async fn run(device: String, baud: u32, link: Vec<String>, wire: WireSpec) -> Result<()> {
+pub async fn run(
+    device: String,
+    baud: u32,
+    link: Vec<String>,
+    wire: WireSpec,
+    json: bool,
+) -> Result<()> {
     // Check the baud before opening anything, so a typo fails as usage rather
     // than as a port that quietly runs at the wrong speed.
     check_baud(baud)?;
@@ -72,14 +79,14 @@ pub async fn run(device: String, baud: u32, link: Vec<String>, wire: WireSpec) -
 
     // Readiness contract: one stdout line per --link, in the order given,
     // flushed — so a script can read them positionally.
-    {
-        use std::io::Write as _;
-        let mut stdout = std::io::stdout().lock();
-        for l in &links {
-            writeln!(stdout, "{}", l.path())?;
-        }
-        stdout.flush()?;
-    }
+    let paths: Vec<&str> = links.iter().map(|l| l.path()).collect();
+    status::announce(
+        json,
+        "mux",
+        &paths,
+        serde_json::json!({ "device": device, "baud": baud }),
+        &wire,
+    )?;
     eprintln!("ttyforge: mux ready: {device} @ {baud} -> {} port(s) (Ctrl-C to stop)", links.len());
 
     // Device → every consumer (one copy each), and every consumer → device

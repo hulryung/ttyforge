@@ -2,6 +2,7 @@
 //!
 //!   pty    the virtual-port core every forge uses (M1)
 //!   signals shutdown handlers, installed before readiness is announced
+//!   status  the readiness announcement, plain or --json (M6)
 //!   wire   timing/fault layer between any two ends (M3)
 //!   pair   virtual null-modem cable (M1)
 //!   sim    simulated device behind a port (M2)
@@ -18,4 +19,5 @@ pub mod rfc2217;
 pub mod serial;
 pub mod signals;
 pub mod sim;
+pub mod status;
 pub mod wire;

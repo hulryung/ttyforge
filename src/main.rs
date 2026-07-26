@@ -29,6 +29,11 @@ mod forge;
                   ready — one line per port, flushed — so scripts can capture them."
 )]
 struct Cli {
+    /// Announce readiness as one JSON object instead of one path per line
+    /// (adds the forge, its pid, and the wire seed — including a generated
+    /// one, which is what replays a failing lossy-wire run).
+    #[arg(long, global = true)]
+    json: bool,
     #[command(flatten)]
     wire: WireArgs,
     #[command(subcommand)]
@@ -158,6 +163,7 @@ fn main() -> ExitCode {
         .init();
 
     let cli = Cli::parse();
+    let json = cli.json;
     let mut wire = cli.wire.to_spec();
     wire.resolve_seed();
     let rt =
@@ -165,12 +171,16 @@ fn main() -> ExitCode {
 
     let result = rt.block_on(async {
         match cli.cmd {
-            Cmd::Pair { link } => forge::pair::run(link, wire).await,
-            Cmd::Sim { preset, link, exec } => forge::sim::run(preset, link, exec, wire).await,
-            Cmd::Bridge { endpoint, link, rfc2217 } => {
-                forge::bridge::run(endpoint, link, rfc2217, wire).await
+            Cmd::Pair { link } => forge::pair::run(link, wire, json).await,
+            Cmd::Sim { preset, link, exec } => {
+                forge::sim::run(preset, link, exec, wire, json).await
             }
-            Cmd::Mux { device, baud, link } => forge::mux::run(device, baud, link, wire).await,
+            Cmd::Bridge { endpoint, link, rfc2217 } => {
+                forge::bridge::run(endpoint, link, rfc2217, wire, json).await
+            }
+            Cmd::Mux { device, baud, link } => {
+                forge::mux::run(device, baud, link, wire, json).await
+            }
         }
     });
 

@@ -6,6 +6,11 @@ rust-version = "1.85"
 description = "Forge virtual serial ports: null-modem pairs, scripted device simulators, network bridges, and port multiplexers — a socat/ser2net replacement built for serial work."
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/hulryung/ttyforge"
+readme = "README.md"
+keywords = ["serial", "pty", "tty", "uart", "socat"]
+categories = ["command-line-utilities", "development-tools::testing", "hardware-support"]
+# The design log is worth shipping; CI config is not.
+exclude = [".github/"]
 
 [dependencies]
 tokio = { version = "1.40", features = ["full"] }
@@ -14,14 +19,16 @@ anyhow = "1"
 libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# M6 `--json`: a JSON writer rather than hand-rolled quoting — a --link path
+# is arbitrary text, and escaping it by hand is how status output starts lying.
+serde_json = "1"
 
 [dev-dependencies]
 # test-util enables tokio's paused clock (start_paused) so the wire's pacing
 # math is asserted exactly, without real sleeps.
 tokio = { version = "1.40", features = ["full", "test-util"] }
 
-# Planned (uncomment per milestone — see PLAN.md):
-# tokio-serial = "5.4"    # M5 mux: open the real port
-# rand = "0.8"            # M3 wire: fault injection (drop/corrupt)
-# serde = { version = "1", features = ["derive"] }  # M6: --json status output
-# serde_json = "1"
+# Three dependencies pencilled in by PLAN never landed, on purpose:
+# tokio-serial (M5) would have brought serialport + libudev to call open() and
+# tcsetattr(); rand (M3) would have made a --seed replay differently across
+# platforms; serde's derive (M6) is unnecessary next to serde_json's writer.

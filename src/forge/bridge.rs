@@ -40,6 +40,7 @@ use tokio::sync::Mutex;
 use super::pty::{Link, SetupError, VirtualPort};
 use super::rfc2217::{self, PortSettings, Telnet};
 use super::signals::Shutdown;
+use super::status;
 use super::wire::{deliver, deliver_to, Wire, WireSpec};
 
 /// Idle nap when the port reports "no consumer attached" (`Ok(0)`), and the
@@ -59,6 +60,7 @@ pub async fn run(
     link: Option<String>,
     rfc2217: bool,
     wire: WireSpec,
+    json: bool,
 ) -> Result<()> {
     // Parse before creating anything: a typo'd endpoint should fail with a
     // usage-shaped message, not leave a half-built port behind.
@@ -86,12 +88,13 @@ pub async fn run(
     let mut shutdown = Shutdown::install()?;
 
     // Readiness contract: exactly one stdout line, flushed.
-    {
-        use std::io::Write as _;
-        let mut stdout = std::io::stdout().lock();
-        writeln!(stdout, "{}", link.path())?;
-        stdout.flush()?;
-    }
+    status::announce(
+        json,
+        "bridge",
+        &[link.path()],
+        serde_json::json!({ "endpoint": peer_desc, "rfc2217": rfc2217 }),
+        &wire,
+    )?;
     eprintln!(
         "ttyforge: bridge ready: {} <-> {peer_desc}{} (Ctrl-C to stop)",
         link.path(),
