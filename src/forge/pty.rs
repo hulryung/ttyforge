@@ -71,13 +71,18 @@ impl VirtualPort {
         // fast consumer could open a cooked slave.
         let mut tio: libc::termios = unsafe { std::mem::zeroed() };
         unsafe { libc::cfmakeraw(&mut tio) };
+        // Through a raw pointer on purpose: openpty takes the termios as
+        // `*mut` on the BSDs and `*const` on Linux, and `*mut` coerces to
+        // either. Passing `&mut tio` compiles on both but is an unnecessary
+        // mutable borrow on Linux, which clippy rightly rejects.
+        let tio_ptr: *mut libc::termios = &mut tio;
         // SAFETY: out-params are valid; termios is initialized; win size null.
         let r = unsafe {
             libc::openpty(
                 &mut master,
                 &mut slave,
                 std::ptr::null_mut(),
-                &mut tio,
+                tio_ptr,
                 std::ptr::null_mut(),
             )
         };

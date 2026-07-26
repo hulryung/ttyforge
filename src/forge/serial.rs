@@ -169,6 +169,9 @@ const EXTRA: &[(libc::speed_t, u32)] = &[];
 /// `speed_t` → bits per second. An unknown code is taken at face value,
 /// which is right on the BSDs (where arbitrary rates are legal) and
 /// unreachable on Linux, where every code is in the table.
+// `speed_t` is u32 on Linux and u64 on the BSDs, so on exactly one of the two
+// this cast is a no-op. Keeping it is what makes the function compile on both.
+#[allow(clippy::unnecessary_cast)]
 pub fn baud_of(speed: libc::speed_t) -> u32 {
     COMMON
         .iter()

@@ -26,8 +26,10 @@ fn fake_device() -> FakeDevice {
     let mut tio: libc::termios = unsafe { std::mem::zeroed() };
     unsafe { libc::cfmakeraw(&mut tio) };
     // SAFETY: out-params are valid; termios is initialized; win size null.
+    // `*mut` coerces to the `*const` Linux declares; see pty.rs.
+    let tio_ptr: *mut libc::termios = &mut tio;
     let rc = unsafe {
-        libc::openpty(&mut m, &mut s, std::ptr::null_mut(), &mut tio, std::ptr::null_mut())
+        libc::openpty(&mut m, &mut s, std::ptr::null_mut(), tio_ptr, std::ptr::null_mut())
     };
     assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
     let mut name = [0 as libc::c_char; 256];
