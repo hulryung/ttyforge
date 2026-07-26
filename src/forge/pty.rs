@@ -28,6 +28,13 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use anyhow::{Context, Result};
 use tokio::io::{unix::AsyncFd, Interest};
 
+// The `libc` crate declares `ptsname_r` only for Linux, but the function
+// exists with this exact signature in libSystem on macOS 10.13.4+ as well —
+// and it is the only reliable way to name a pty slave (see `create`).
+extern "C" {
+    fn ptsname_r(fd: libc::c_int, buf: *mut libc::c_char, buflen: libc::size_t) -> libc::c_int;
+}
+
 /// Marker attachable to an anyhow chain (`.context(SetupError)`) so `main`
 /// can map pre-ready failures to exit 3 and everything else to exit 2.
 #[derive(Debug)]
@@ -80,17 +87,26 @@ impl VirtualPort {
 
         // Resolve the slave device path (e.g. /dev/ttys012) to publish.
         //
-        // 1024 rather than 256: macOS reports `_SC_TTY_NAME_MAX` as 255, so a
-        // 256-byte buffer sits one byte above the platform's own stated
-        // maximum. This call has been seen to fail exactly once, in a unit
-        // test under a parallel suite load, and never reproduced (55+ runs,
-        // targeted concurrency stress, and 470 held ptys all came back
-        // clean). ERANGE is the only plausible candidate at that size, so
-        // leave it no room; the errno is kept in the message in case the real
-        // cause is something else and shows up again.
-        let mut name_buf = [0 as libc::c_char; 1024];
-        // SAFETY: slave is a valid tty fd; buffer is sized.
-        let rc = unsafe { libc::ttyname_r(slave, name_buf.as_mut_ptr(), name_buf.len()) };
+        // `ptsname_r(master)`, not the more obvious `ttyname_r(slave)`: on
+        // macOS `ttyname_r` resolves the name by looking the device up in
+        // /dev, and *every* failure of that lookup is reported as ERANGE — a
+        // "buffer too small" errno that has nothing to do with the buffer.
+        // Under concurrent pty creation that lookup fails constantly:
+        // measured here at 3648 ERANGEs in 4000 calls across ten processes,
+        // at every buffer size from 32 bytes to 4 KiB, while `ptsname_r` on
+        // the same ptys returned the identical names 4000/4000. It asks the
+        // kernel (TIOCPTYGNAME) instead of searching a directory.
+        //
+        // This is not hypothetical for a tool whose whole job is forging
+        // ptys: a `mux` beside a `pair`, or a CI job running both, is exactly
+        // the workload that trips it.
+        //
+        // Needs macOS 10.13.4+ for `ptsname_r`; glibc and musl have long had
+        // it. Both platforms yield a path under /dev.
+        let mut name_buf = [0 as libc::c_char; 256];
+        // SAFETY: master is a valid pty master fd; buffer is sized and
+        // outlives the call.
+        let rc = unsafe { ptsname_r(master, name_buf.as_mut_ptr(), name_buf.len()) };
         if rc != 0 {
             // Clean up the fds we just opened before bailing.
             // SAFETY: both fds were just produced by openpty above.
@@ -99,10 +115,10 @@ impl VirtualPort {
                 libc::close(slave);
             }
             return Err(std::io::Error::from_raw_os_error(rc))
-                .with_context(|| format!("ttyname_r on pty slave (errno {rc})"))
+                .with_context(|| format!("ptsname_r on pty master (errno {rc})"))
                 .context(SetupError);
         }
-        // SAFETY: ttyname_r NUL-terminated the buffer on success.
+        // SAFETY: ptsname_r NUL-terminated the buffer on success.
         let slave_name =
             unsafe { std::ffi::CStr::from_ptr(name_buf.as_ptr()) }.to_string_lossy().into_owned();
 
@@ -442,6 +458,36 @@ mod tests {
         assert!(port.reassert_raw_if_needed());
         let after = port.termios().expect("termios");
         assert_eq!(after.c_cflag & libc::CSIZE, libc::CS8, "plain rule 5 → CS8");
+    }
+
+    /// Regression: resolving the slave path must survive several threads
+    /// forging ports at once — `ttyforge mux` next to a `ttyforge pair`, or
+    /// one CI job doing both.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn slave_paths_resolve_under_concurrent_churn() {
+        let mut tasks = Vec::new();
+        for _ in 0..8 {
+            // Report rather than panic: a panicking blocking task tears the
+            // runtime down and the *next* port creation fails with a confusing
+            // "context is shutting down" instead of the real cause.
+            tasks.push(tokio::task::spawn_blocking(|| {
+                for _ in 0..40 {
+                    match VirtualPort::create() {
+                        Ok((_port, name)) if name.starts_with("/dev/") => {}
+                        Ok((_port, name)) => return Err(format!("implausible path {name:?}")),
+                        Err(e) => return Err(format!("{e:#}")),
+                    }
+                }
+                Ok(())
+            }));
+        }
+        let mut failures = Vec::new();
+        for t in tasks {
+            if let Err(e) = t.await.expect("churn task") {
+                failures.push(e);
+            }
+        }
+        assert!(failures.is_empty(), "forging ports concurrently failed: {failures:#?}");
     }
 
     #[test]
