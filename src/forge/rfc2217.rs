@@ -331,7 +331,7 @@ impl PortSettings {
             3
         };
         Self {
-            baud: baud_of(speed),
+            baud: super::serial::baud_of(speed),
             data_bits,
             parity,
             stop_bits: if tio.c_cflag & libc::CSTOPB != 0 { 2 } else { 1 },
@@ -381,57 +381,6 @@ impl PortSettings {
         };
         format!("{} {}{}{}{}", self.baud, self.data_bits, p, self.stop_bits, f)
     }
-}
-
-/// Turn a `speed_t` into bits per second.
-///
-/// Linux encodes speeds as small indices (`B9600` == 13), the BSDs — macOS
-/// included — store the number itself (`B9600` == 9600). The table covers
-/// every constant both platforms name; anything else is taken at face value,
-/// which is right on BSD (where `cfsetspeed` accepts arbitrary rates such as
-/// 921600) and unreachable on Linux, where every code is in the table.
-fn baud_of(speed: libc::speed_t) -> u32 {
-    const COMMON: &[(libc::speed_t, u32)] = &[
-        (libc::B0, 0),
-        (libc::B50, 50),
-        (libc::B75, 75),
-        (libc::B110, 110),
-        (libc::B134, 134),
-        (libc::B150, 150),
-        (libc::B200, 200),
-        (libc::B300, 300),
-        (libc::B600, 600),
-        (libc::B1200, 1200),
-        (libc::B1800, 1800),
-        (libc::B2400, 2400),
-        (libc::B4800, 4800),
-        (libc::B9600, 9600),
-        (libc::B19200, 19200),
-        (libc::B38400, 38400),
-        (libc::B57600, 57600),
-        (libc::B115200, 115200),
-        (libc::B230400, 230400),
-    ];
-    #[cfg(target_os = "linux")]
-    const EXTRA: &[(libc::speed_t, u32)] = &[
-        (libc::B460800, 460800),
-        (libc::B500000, 500000),
-        (libc::B576000, 576000),
-        (libc::B921600, 921600),
-        (libc::B1000000, 1000000),
-        (libc::B1152000, 1152000),
-        (libc::B1500000, 1500000),
-        (libc::B2000000, 2000000),
-    ];
-    #[cfg(not(target_os = "linux"))]
-    const EXTRA: &[(libc::speed_t, u32)] = &[];
-
-    COMMON
-        .iter()
-        .chain(EXTRA)
-        .find(|(code, _)| *code == speed)
-        .map(|(_, baud)| *baud)
-        .unwrap_or(speed as u32)
 }
 
 #[cfg(test)]

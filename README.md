@@ -21,7 +21,7 @@ ttyforge mux /dev/ttyUSB0 --link a.pty --link b.pty   # 1 port → N tools
 ttyforge pair --baud-sim 9600 --latency 5ms --drop 0.001 --seed 42
 ```
 
-**Status: M4 done** — `pair`, `sim`, `bridge` (raw TCP *and* RFC2217), and the wire model (`--baud-sim`/`--latency`/`--jitter`/`--drop`/`--corrupt`/`--seed`) work; ZMODEM survives a seeded lossy wire via retransmission. The bridge outlives its peers — `listen://` re-accepts, `tcp://` redials with backoff, and the local path never goes away, so minicom survives a lab-host reboot. With `--rfc2217`, the baud/parity/framing a tool sets on the virtual port retunes the *real* UART at the far end (verified against pyserial's RFC2217 server). `mux` (M5) next; see [PLAN.md](PLAN.md) for the roadmap.
+**Status: M5 done — every forge works** — `pair`, `sim`, `bridge` (raw TCP *and* RFC2217), `mux`, and the wire model (`--baud-sim`/`--latency`/`--jitter`/`--drop`/`--corrupt`/`--seed`) work; ZMODEM survives a seeded lossy wire via retransmission. The bridge outlives its peers — `listen://` re-accepts, `tcp://` redials with backoff, and the local path never goes away, so minicom survives a lab-host reboot. With `--rfc2217`, the baud/parity/framing a tool sets on the virtual port retunes the *real* UART at the far end (verified against pyserial's RFC2217 server). `mux` fans one real port out to N virtual ttys, and every consumer gets the whole RX stream — not a share of it. Packaging (M6) is what's left; see [PLAN.md](PLAN.md) for the roadmap.
 Sibling project: [serial-tether](https://github.com/hulryung/serial-tether)
 (daemon-based sharing of *real* ports; ttyforge forges the *virtual* side).
 

@@ -81,7 +81,16 @@ impl VirtualPort {
         }
 
         // Resolve the slave device path (e.g. /dev/ttys012) to publish.
-        let mut name_buf = [0 as libc::c_char; 256];
+        //
+        // 1024 rather than 256: macOS reports `_SC_TTY_NAME_MAX` as 255, so a
+        // 256-byte buffer sits one byte above the platform's own stated
+        // maximum. This call has been seen to fail exactly once, in a unit
+        // test under a parallel suite load, and never reproduced (55+ runs,
+        // targeted concurrency stress, and 470 held ptys all came back
+        // clean). ERANGE is the only plausible candidate at that size, so
+        // leave it no room; the errno is kept in the message in case the real
+        // cause is something else and shows up again.
+        let mut name_buf = [0 as libc::c_char; 1024];
         // SAFETY: slave is a valid tty fd; buffer is sized.
         let rc = unsafe { libc::ttyname_r(slave, name_buf.as_mut_ptr(), name_buf.len()) };
         if rc != 0 {
@@ -92,7 +101,7 @@ impl VirtualPort {
                 libc::close(slave);
             }
             return Err(std::io::Error::from_raw_os_error(rc))
-                .context("ttyname_r on pty slave")
+                .with_context(|| format!("ttyname_r on pty slave (errno {rc})"))
                 .context(SetupError);
         }
         // SAFETY: ttyname_r NUL-terminated the buffer on success.
@@ -126,44 +135,14 @@ impl VirtualPort {
     /// consumer is attached right now — callers should idle briefly, not
     /// treat it as EOF (the port outlives consumers; rule 2).
     pub async fn read(&self, buf: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let mut guard = self.master.readable().await?;
-            let raw = self.master.get_ref().as_raw_fd();
-            // SAFETY: raw fd is valid; buf is a writable slice.
-            let n = unsafe { libc::read(raw, buf.as_mut_ptr() as *mut _, buf.len()) };
-            if n >= 0 {
-                return Ok(n as usize);
-            }
-            let e = std::io::Error::last_os_error();
-            if e.kind() == std::io::ErrorKind::WouldBlock {
-                guard.clear_ready();
-                continue;
-            }
-            return Err(e);
-        }
+        read_fd(&self.master, buf).await
     }
 
     /// Write bytes out of the port toward the consumer. Blocks (async) when
     /// the kernel pty buffer is full — natural backpressure when the consumer
     /// isn't draining.
-    pub async fn write_all(&self, mut data: &[u8]) -> std::io::Result<()> {
-        while !data.is_empty() {
-            let mut guard = self.master.writable().await?;
-            let raw = self.master.get_ref().as_raw_fd();
-            // SAFETY: raw fd is valid; data is a readable slice.
-            let n = unsafe { libc::write(raw, data.as_ptr() as *const _, data.len()) };
-            if n >= 0 {
-                data = &data[n as usize..];
-                continue;
-            }
-            let e = std::io::Error::last_os_error();
-            if e.kind() == std::io::ErrorKind::WouldBlock {
-                guard.clear_ready();
-                continue;
-            }
-            return Err(e);
-        }
-        Ok(())
+    pub async fn write_all(&self, data: &[u8]) -> std::io::Result<()> {
+        write_all_fd(&self.master, data).await
     }
 
     /// Rule 5: if the attached consumer switched the slave out of raw mode
@@ -236,6 +215,53 @@ impl VirtualPort {
     pub fn slave_raw_fd(&self) -> RawFd {
         self.slave_keep.as_raw_fd()
     }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Rule 3, once: nonblocking fd + tokio AsyncFd + a manual libc loop. Shared
+// by the pty master here and by the real serial port in `serial.rs` — the
+// retry-on-EWOULDBLOCK dance is subtle enough to deserve one implementation.
+// ──────────────────────────────────────────────────────────────────────────
+
+pub(super) async fn read_fd(afd: &AsyncFd<OwnedFd>, buf: &mut [u8]) -> std::io::Result<usize> {
+    loop {
+        let mut guard = afd.readable().await?;
+        let raw = afd.get_ref().as_raw_fd();
+        // SAFETY: raw fd is valid; buf is a writable slice.
+        let n = unsafe { libc::read(raw, buf.as_mut_ptr() as *mut _, buf.len()) };
+        if n >= 0 {
+            return Ok(n as usize);
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() == std::io::ErrorKind::WouldBlock {
+            guard.clear_ready();
+            continue;
+        }
+        return Err(e);
+    }
+}
+
+pub(super) async fn write_all_fd(
+    afd: &AsyncFd<OwnedFd>,
+    mut data: &[u8],
+) -> std::io::Result<()> {
+    while !data.is_empty() {
+        let mut guard = afd.writable().await?;
+        let raw = afd.get_ref().as_raw_fd();
+        // SAFETY: raw fd is valid; data is a readable slice.
+        let n = unsafe { libc::write(raw, data.as_ptr() as *const _, data.len()) };
+        if n >= 0 {
+            data = &data[n as usize..];
+            continue;
+        }
+        let e = std::io::Error::last_os_error();
+        if e.kind() == std::io::ErrorKind::WouldBlock {
+            guard.clear_ready();
+            continue;
+        }
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// A claimed symlink (`/tmp/…​.pty` → `/dev/ttysNNN`) plus its `.pid`

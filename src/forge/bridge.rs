@@ -39,6 +39,7 @@ use tokio::sync::Mutex;
 
 use super::pty::{Link, SetupError, VirtualPort};
 use super::rfc2217::{self, PortSettings, Telnet};
+use super::signals::Shutdown;
 use super::wire::{deliver, deliver_to, Wire, WireSpec};
 
 /// Idle nap when the port reports "no consumer attached" (`Ok(0)`), and the
@@ -81,6 +82,9 @@ pub async fn run(
     let peers = Peers::bind(endpoint).await.context(SetupError)?;
     let peer_desc = peers.describe();
 
+    // Signals before readiness — see `signals`.
+    let mut shutdown = Shutdown::install()?;
+
     // Readiness contract: exactly one stdout line, flushed.
     {
         use std::io::Write as _;
@@ -97,15 +101,12 @@ pub async fn run(
     let port = Arc::new(port);
     let mut bridge = tokio::spawn(bridge_loop(port.clone(), peers, wire, rfc2217));
 
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .context("install SIGTERM handler")?;
     let mut termios_tick = tokio::time::interval(Duration::from_millis(500));
     termios_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            _ = sigterm.recv() => break,
+            _ = shutdown.recv() => break,
             // The loop never finishes on its own; if it ever does, the port is
             // live but unpumped — surface that instead of idling silently.
             r = &mut bridge => {

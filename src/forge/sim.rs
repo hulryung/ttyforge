@@ -30,6 +30,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 
 use super::pty::{Link, SetupError, VirtualPort};
+use super::signals::Shutdown;
 use super::wire::{deliver, WireSpec};
 
 /// Root error carrying an exec-backend child's nonzero exit status, so `main`
@@ -58,6 +59,9 @@ pub async fn run(
     let (port, slave) = VirtualPort::create()?;
     let link = Link::claim(link.as_deref(), "sim", &slave)?;
 
+    // Signals before readiness — see `signals`.
+    let mut shutdown = Shutdown::install()?;
+
     // Readiness contract: exactly one stdout line, flushed.
     {
         use std::io::Write as _;
@@ -73,7 +77,7 @@ pub async fn run(
                 "ttyforge: sim ready: {} (preset {name}, Ctrl-C to stop)",
                 link.path()
             );
-            preset_loop(port, &link, make_device(name)?, wire).await
+            preset_loop(port, &link, make_device(name)?, wire, &mut shutdown).await
         }
         None => {
             eprintln!(
@@ -81,7 +85,7 @@ pub async fn run(
                 link.path(),
                 exec.join(" ")
             );
-            exec_loop(port, &link, exec, wire).await
+            exec_loop(port, &link, exec, wire, &mut shutdown).await
         }
     }
 }
@@ -116,6 +120,7 @@ async fn preset_loop(
     link: &Link,
     mut device: Box<dyn Device>,
     wire: WireSpec,
+    shutdown: &mut Shutdown,
 ) -> Result<()> {
     // Two wire directions: consumer→device and device→consumer.
     let (mut wire_in, mut wire_out) = wire.build_pair();
@@ -123,8 +128,6 @@ async fn preset_loop(
         .await
         .context("write greeting")?;
 
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .context("install SIGTERM handler")?;
     let mut termios_tick = tokio::time::interval(std::time::Duration::from_millis(500));
     termios_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut buf = [0u8; 4096];
@@ -150,8 +153,7 @@ async fn preset_loop(
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             },
-            _ = tokio::signal::ctrl_c() => break,
-            _ = sigterm.recv() => break,
+            _ = shutdown.recv() => break,
             _ = termios_tick.tick() => {
                 if port.reassert_raw_if_needed() {
                     tracing::debug!(port = link.path(), "reasserted raw termios");
@@ -176,6 +178,7 @@ async fn exec_loop(
     link: &Link,
     exec: Vec<String>,
     wire: WireSpec,
+    shutdown: &mut Shutdown,
 ) -> Result<()> {
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -243,16 +246,13 @@ async fn exec_loop(
         })
     };
 
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .context("install SIGTERM handler")?;
     let mut termios_tick = tokio::time::interval(std::time::Duration::from_millis(500));
     termios_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     let status = loop {
         tokio::select! {
             s = child.wait() => break Some(s.context("wait on device program")?),
-            _ = tokio::signal::ctrl_c() => break None,
-            _ = sigterm.recv() => break None,
+            _ = shutdown.recv() => break None,
             _ = termios_tick.tick() => {
                 if port.reassert_raw_if_needed() {
                     tracing::debug!(port = link.path(), "reasserted raw termios");

@@ -63,8 +63,11 @@ src/forge/pty.rs   가상 포트 코어  ← tether.rs create_client_pty / tethe
 src/forge/wire.rs  타이밍·결함 레이어 (신규)
 src/forge/pair.rs  pty ↔ wire ↔ pty
 src/forge/sim.rs   pty ↔ wire ↔ (자식 프로세스 stdio | 내장 preset)
-src/forge/bridge.rs pty ↔ wire ↔ TcpStream
+src/forge/bridge.rs pty ↔ wire ↔ TcpStream (raw | RFC2217)
+src/forge/rfc2217.rs telnet COM-PORT-OPTION 코덱 + termios 매핑 (M4b)
 src/forge/mux.rs   ring buffer fan-out  ← tetherd/buffer.rs 패턴
+src/forge/serial.rs 실제 시리얼 포트  ← tetherd/serial.rs FdPort (M5)
+src/forge/signals.rs readiness 이전에 등록하는 종료 시그널 (M5)
 ```
 
 tether 에서 검증된 채로 이식하는 규칙 4가지 (`src/forge/pty.rs` 주석에도 기록):
@@ -147,7 +150,7 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
 - 배운 것: pty 커널 버퍼(~2-3KB)를 넘는 순차 write-then-read 테스트는
   backpressure 데드락 — writer 를 스레드로 분리해야 함
 
-### M4 — `bridge` ✅ (M4a raw TCP 완료 / M4b RFC2217 미착수)
+### M4a — `bridge` (raw TCP) ✅ (완료)
 - `tcp://HOST:PORT` 다이얼, `listen://[HOST]:PORT` 수락. 방향별 독립 태스크
 - **포트가 모든 피어보다 오래 산다**: 피어가 끊겨도 pty 는 그대로 —
   listen 은 재수락, tcp 는 250ms→5s 백오프로 재다이얼. minicom 을 붙여둔
@@ -223,10 +226,42 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
   전송·발신 명령 자기 디코딩 + rule 5 분리 / 통합 3: 설정 릴레이와 유휴 시
   침묵과 변경분만, 바이너리 투명성, listen 모드 거부 exit 3)
 
-### M5 — `mux`
-- ring buffer + 소비자별 cursor (tetherd/buffer.rs 패턴), TX 직렬화
-- **수용 기준**: 소비자 2개가 각각 RX 전체 사본을 수신 (tether 가 측정한
-  128/72 분할 문제의 부재를 테스트로 고정)
+### M5 — `mux` ✅ (완료)
+- 팬아웃: 장치를 **읽는 태스크가 정확히 하나**. 그 읽기를 broadcast 채널로
+  한 번 게시하고 소비자마다 독립 커서로 사본을 받는다 — tetherd/buffer.rs
+  의 ring + per-consumer-cursor 패턴을 tokio 가 이미 구현해 둔 형태. 용량은
+  바이트가 아니라 read 개수(BACKLOG=256, 최대 ~2MB)
+- 느린 소비자가 장치를 막지 못한다: 밀린 소비자는 **자기 사본만** 오래된
+  쪽부터 잃고 그 사실을 stderr 로 통보받는다. UART 까지 backpressure 를 거는
+  대안은 아무도 요청하지 않은 데이터 손실을 만든다
+- TX 병합: 소비자 N → mpsc → **쓰기 태스크 하나**. 청크 단위 인터리브는
+  실제 케이블과 같고, 청크가 쪼개지지는 않는다
+- `src/forge/serial.rs` (신규): 실제 포트 열기. **tokio-serial 미사용** —
+  FdPort 패턴이 이미 repo 에 있고(pty.rs 규칙 3) tty 를 여는 건 open +
+  tcsetattr 인데, tokio-serial 은 mio-serial + serialport(Linux 에서 libudev)
+  를 끌고 온다. M6 에서 homebrew/crates.io 로 가는 단일 바이너리가 syscall
+  두 개 때문에 시스템 라이브러리 의존을 늘릴 이유가 없다. 부수효과가 오히려
+  핵심: **어떤 tty 경로든 열 수 있어 하드웨어 없이 mux 를 end-to-end 로
+  테스트**할 수 있다 (테스트가 openpty 로 장치를 만든다)
+- 규칙 3 중복 제거: `pty::read_fd`/`write_all_fd` 로 추출 — pty master 와
+  실제 포트가 같은 구현을 쓴다. baud 테이블도 serial.rs 로 모아 rfc2217 이
+  재사용. CLOCAL|CREAD, VMIN/VTIME=0, tcsetattr 후 **읽기 검증**(드라이버가
+  조용히 거부한 baud 를 경고 — 조용히 틀린 속도로 도는 포트는 긴 오후다)
+- `TIOCEXCL` 은 일부러 안 건다: 락·세션은 tether 의 일이고 mux 는 빠른 로컬
+  분배기
+- **수용 기준 통과**: `sim --preset uboot` 을 장치로 두고 mux 로 포트 2개,
+  script 쪽에서 `version` → **두 소비자가 완전히 동일한 전체 스트림** 수신
+  (script 가 친 입력의 에코까지). tether 가 128/72 로 쪼개졌던 바로 그
+  200바이트 케이스를 통합 테스트로 고정
+- 곁다리로 고친 것: **시그널 핸들러를 ready 라인 뒤에 설치하고 있었다** —
+  경로를 읽자마자 SIGTERM 을 보내면 기본 동작으로 죽어 링크와 sidecar 가
+  남고 종료 코드도 143. M5 teardown 테스트가 매번 재현했다. `signals::
+  Shutdown` 으로 SIGTERM+SIGINT 를 **readiness 이전에** 등록하도록 4개 forge
+  전부 수정 (`ctrl_c()` 는 처음 poll 될 때 등록되므로 루프 안에서는 늦다)
+- 테스트 10개 (유닛 4: baud 왕복, non-tty·없는 장치 → SetupError, pty 를
+  장치로 열어 양방향 / 통합 6: 200바이트 전량 팬아웃, 16KiB × 소비자 3,
+  TX 병합 무결성, 한 소비자의 재open 이 다른 소비자에 무영향, SIGTERM 전체
+  정리, 잘못된 장치 exit 3)
 
 ### M6 — 배포·마감
 - `--json` 상태 출력, README/예제, GitHub Actions CI (macOS+Linux),

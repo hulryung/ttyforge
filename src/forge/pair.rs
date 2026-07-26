@@ -14,6 +14,7 @@ use std::sync::Arc;
 use anyhow::{bail, Context, Result};
 
 use super::pty::{Link, VirtualPort};
+use super::signals::Shutdown;
 use super::wire::{pump, WireSpec};
 
 pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
@@ -26,6 +27,10 @@ pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
     // `Link::claim` tags its own failures as SetupError (exit 3).
     let link_a = Link::claim(link.first().map(|s| s.as_str()), "a", &slave_a).context("side A")?;
     let link_b = Link::claim(link.get(1).map(|s| s.as_str()), "b", &slave_b).context("side B")?;
+
+    // Signals before readiness: once the paths are out, a script may kill
+    // us immediately, and that must be a clean teardown (see `signals`).
+    let mut shutdown = Shutdown::install()?;
 
     // Readiness contract: exactly two stdout lines (A then B), flushed, so
     // scripts can `{ read A; read B; } < <(ttyforge pair)`.
@@ -48,15 +53,12 @@ pub async fn run(link: Vec<String>, wire: WireSpec) -> Result<()> {
     let ab = tokio::spawn(pump(a.clone(), b.clone(), wire_ab));
     let ba = tokio::spawn(pump(b.clone(), a.clone(), wire_ba));
 
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .context("install SIGTERM handler")?;
     let mut termios_tick = tokio::time::interval(std::time::Duration::from_millis(500));
     termios_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            _ = sigterm.recv() => break,
+            _ = shutdown.recv() => break,
             _ = termios_tick.tick() => {
                 // Rule 5: a naive consumer may cook the slave; quietly fix.
                 if a.reassert_raw_if_needed() {
