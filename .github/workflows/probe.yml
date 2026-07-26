@@ -1,0 +1,30 @@
+name: probe
+on: workflow_dispatch
+jobs:
+  termios:
+    runs-on: ubuntu-latest
+    steps:
+      - name: What does a Linux pty actually retain?
+        run: |
+          python3 - <<'PY'
+          import os, termios
+          m, s = os.openpty()
+          a = termios.tcgetattr(s)
+          a[2] = (a[2] & ~termios.CSIZE) | termios.CS7 | termios.PARENB | termios.PARODD | termios.CSTOPB | termios.CRTSCTS
+          a[3] |= termios.ICANON | termios.ECHO
+          a[4] = a[5] = termios.B9600
+          termios.tcsetattr(s, termios.TCSANOW, a)
+          b = termios.tcgetattr(s)
+          print("PROBE CSIZE      =", hex(b[2] & termios.CSIZE), "(CS7=%s CS8=%s)" % (hex(termios.CS7), hex(termios.CS8)))
+          print("PROBE PARENB     =", bool(b[2] & termios.PARENB))
+          print("PROBE PARODD     =", bool(b[2] & termios.PARODD))
+          print("PROBE CSTOPB     =", bool(b[2] & termios.CSTOPB))
+          print("PROBE CRTSCTS    =", bool(b[2] & termios.CRTSCTS))
+          print("PROBE ispeed     =", b[4], "ospeed =", b[5], "(B9600=%s B38400=%s)" % (termios.B9600, termios.B38400))
+          print("PROBE ICANON     =", bool(b[3] & termios.ICANON), "ECHO =", bool(b[3] & termios.ECHO))
+          # And does CS7 mask the 8th bit of transferred data?
+          os.write(m, bytes([0xFF, 0x80, 0x41]))
+          import select
+          select.select([s], [], [], 1.0)
+          print("PROBE data through CS7 pty:", os.read(s, 8).hex())
+          PY
