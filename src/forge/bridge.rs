@@ -2,9 +2,10 @@
 //!
 //! `tcp://HOST:PORT` dials out and bridges; `listen://[HOST]:PORT` accepts one
 //! connection at a time (re-listens after a peer drops, port stays alive).
-//! Raw byte bridge first. RFC2217 client mode (M4b) adds remote baud/DTR/RTS:
-//! termios changes a tool makes on the virtual port get translated into
-//! telnet COM-PORT-OPTION commands for a ser2net-style server.
+//! Raw bytes by default; `--rfc2217` (M4b) instead speaks telnet
+//! COM-PORT-OPTION, so the baud/parity/framing a tool sets on the virtual
+//! port retunes the real UART behind a ser2net-style server — see the
+//! `rfc2217` module, including why DTR/RTS cannot follow.
 //!
 //! The peer has to speak *raw bytes*: ser2net, ESP-Link, `socat TCP-LISTEN:…
 //! FILE:/dev/ttyUSB0,rawer`, `nc -l`, or another ttyforge. Note that
@@ -26,25 +27,48 @@
 //! block the local tool's writes forever and then flood the next peer with
 //! minutes-old keystrokes. So the port is drained while the wire is down.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use tokio::io::AsyncReadExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 
 use super::pty::{Link, SetupError, VirtualPort};
+use super::rfc2217::{self, PortSettings, Telnet};
 use super::wire::{deliver, deliver_to, Wire, WireSpec};
 
 /// Idle nap when the port reports "no consumer attached" (`Ok(0)`), and the
 /// pause after a transient error — same values the other forges use.
 const IDLE: Duration = Duration::from_millis(50);
 const RETRY: Duration = Duration::from_millis(100);
+/// How often RFC2217 mode re-reads the slave's termios. A pty master is never
+/// told about a reconfiguration, so this poll is the only way to see one
+/// (PLAN §6's decision A). One `tcgetattr` per tick is nothing, and the tick
+/// is only a *ceiling* on latency: settings are also synced immediately
+/// before forwarding data, which is what actually orders a baud change ahead
+/// of the bytes typed after it.
+const SETTINGS_POLL: Duration = Duration::from_millis(100);
 
-pub async fn run(endpoint: String, link: Option<String>, wire: WireSpec) -> Result<()> {
+pub async fn run(
+    endpoint: String,
+    link: Option<String>,
+    rfc2217: bool,
+    wire: WireSpec,
+) -> Result<()> {
     // Parse before creating anything: a typo'd endpoint should fail with a
     // usage-shaped message, not leave a half-built port behind.
     let endpoint = Endpoint::parse(&endpoint).context(SetupError)?;
+    if rfc2217 && matches!(endpoint, Endpoint::Accept(_)) {
+        return Err(anyhow::anyhow!(
+            "--rfc2217 is a client mode — use tcp://HOST:PORT. Accepting would \
+             mean *being* the ser2net-style server, which is out of scope."
+        ))
+        .context(SetupError);
+    }
 
     let (port, slave) = VirtualPort::create()?;
     let link = Link::claim(link.as_deref(), "bridge", &slave)?;
@@ -65,12 +89,13 @@ pub async fn run(endpoint: String, link: Option<String>, wire: WireSpec) -> Resu
         stdout.flush()?;
     }
     eprintln!(
-        "ttyforge: bridge ready: {} <-> {peer_desc} (Ctrl-C to stop)",
-        link.path()
+        "ttyforge: bridge ready: {} <-> {peer_desc}{} (Ctrl-C to stop)",
+        link.path(),
+        if rfc2217 { " (RFC2217)" } else { "" }
     );
 
     let port = Arc::new(port);
-    let mut bridge = tokio::spawn(bridge_loop(port.clone(), peers, wire));
+    let mut bridge = tokio::spawn(bridge_loop(port.clone(), peers, wire, rfc2217));
 
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .context("install SIGTERM handler")?;
@@ -91,7 +116,14 @@ pub async fn run(endpoint: String, link: Option<String>, wire: WireSpec) -> Resu
             }
             _ = termios_tick.tick() => {
                 // Rule 5: a naive consumer may cook the slave; quietly fix.
-                if port.reassert_raw_if_needed() {
+                // In RFC2217 mode the line parameters are the consumer's
+                // message to the far-end UART, so they are left alone.
+                let fixed = if rfc2217 {
+                    port.reassert_line_discipline_if_needed()
+                } else {
+                    port.reassert_raw_if_needed()
+                };
+                if fixed {
                     tracing::debug!(port = link.path(), "reasserted raw termios");
                 }
             }
@@ -106,7 +138,14 @@ pub async fn run(endpoint: String, link: Option<String>, wire: WireSpec) -> Resu
 
 /// Peer after peer, forever: wait for one, bridge it until it goes away, wait
 /// for the next. The virtual port survives all of it.
-async fn bridge_loop(port: Arc<VirtualPort>, mut peers: Peers, spec: WireSpec) {
+async fn bridge_loop(port: Arc<VirtualPort>, mut peers: Peers, spec: WireSpec, rfc2217: bool) {
+    // What a freshly forged port looks like before any consumer touches it.
+    // Every RFC2217 session diffs from here, so a peer that arrives late — or
+    // second — is still told everything the consumer has chosen.
+    let pristine = port
+        .termios()
+        .map(|t| PortSettings::from_termios(&t))
+        .unwrap_or(PortSettings::UNSET);
     let mut session = 0u64;
     loop {
         // Keep the port drained while the wire is down (see module docs), and
@@ -126,7 +165,11 @@ async fn bridge_loop(port: Arc<VirtualPort>, mut peers: Peers, spec: WireSpec) {
         session += 1;
         eprintln!("ttyforge: peer connected: {who}");
         let (to_peer, from_peer) = spec.build_pair_nth(session);
-        run_session(port.clone(), stream, to_peer, from_peer).await;
+        if rfc2217 {
+            run_rfc2217_session(port.clone(), stream, to_peer, from_peer, pristine).await;
+        } else {
+            run_session(port.clone(), stream, to_peer, from_peer).await;
+        }
         eprintln!("ttyforge: peer disconnected: {who} (port stays up)");
     }
 }
@@ -197,6 +240,170 @@ async fn run_session(port: Arc<VirtualPort>, stream: TcpStream, to_peer: Wire, f
             let _ = up.await;
         }
     }
+}
+
+/// [`run_session`]'s RFC2217 sibling (M4b). Three differences, all forced by
+/// the peer stream being telnet rather than raw:
+///
+/// - outbound data is IAC-escaped, inbound is decoded back;
+/// - both directions share one socket writer behind a mutex, because a
+///   subnegotiation spliced into the middle of an escaped chunk would corrupt
+///   the stream in both directions;
+/// - the port's termios is polled and the deltas relayed as COM-PORT-OPTION.
+async fn run_rfc2217_session(
+    port: Arc<VirtualPort>,
+    stream: TcpStream,
+    to_peer: Wire,
+    from_peer: Wire,
+    pristine: PortSettings,
+) {
+    let (mut peer_rx, peer_tx) = stream.into_split();
+    let peer_tx = Arc::new(Mutex::new(peer_tx));
+    let mut telnet = Telnet::new();
+    // Shared with the sending side so it stops relaying settings the moment
+    // the peer says it doesn't speak COM-PORT-OPTION.
+    let com_ok = Arc::new(AtomicBool::new(true));
+
+    // Offers first, before a single data byte can race them onto the wire.
+    if peer_tx.lock().await.write_all(&telnet.start()).await.is_err() {
+        return;
+    }
+
+    // Port → peer, plus the settings poll. Deliberately one task: the tick
+    // and the read are the only two things that can produce output, so
+    // handling both here makes "a settings change reaches the peer before the
+    // bytes that follow it" structural rather than a matter of luck.
+    let mut up = {
+        let port = port.clone();
+        let peer_tx = peer_tx.clone();
+        let com_ok = com_ok.clone();
+        let mut wire = to_peer;
+        tokio::spawn(async move {
+            let mut buf = [0u8; 8192];
+            let mut last = pristine;
+            let mut poll = tokio::time::interval(SETTINGS_POLL);
+            poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    r = port.read(&mut buf) => match r {
+                        Ok(0) => tokio::time::sleep(IDLE).await,
+                        Ok(n) => {
+                            if !sync_settings(&port, &mut last, &com_ok, &peer_tx).await {
+                                break;
+                            }
+                            let mut gone = false;
+                            for cell in wire.plan(&buf[..n]) {
+                                tokio::time::sleep_until(cell.due).await;
+                                let framed = rfc2217::escape(&cell.data);
+                                // Locked per complete message, and only after
+                                // the pacing sleep — a throttled wire must not
+                                // hold the writer hostage.
+                                if peer_tx.lock().await.write_all(&framed).await.is_err() {
+                                    gone = true;
+                                    break;
+                                }
+                            }
+                            if gone {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "port read failed");
+                            tokio::time::sleep(RETRY).await;
+                        }
+                    },
+                    _ = poll.tick() => {
+                        if !sync_settings(&port, &mut last, &com_ok, &peer_tx).await {
+                            break;
+                        }
+                    }
+                }
+            }
+        })
+    };
+
+    // Peer → port: telnet out, bytes in.
+    let mut down = {
+        let peer_tx = peer_tx.clone();
+        let mut wire = from_peer;
+        tokio::spawn(async move {
+            let mut buf = [0u8; 8192];
+            loop {
+                match peer_rx.read(&mut buf).await {
+                    Ok(0) => break, // peer closed (or half-closed) the socket
+                    Ok(n) => {
+                        let decoded = telnet.decode(&buf[..n]);
+                        if !telnet.com_port_ok() && com_ok.swap(false, Ordering::Relaxed) {
+                            eprintln!(
+                                "ttyforge: peer refused RFC2217 COM-PORT-OPTION — \
+                                 termios changes will not be relayed"
+                            );
+                        }
+                        for note in decoded.notices {
+                            tracing::info!("rfc2217: {note}");
+                        }
+                        if !decoded.reply.is_empty()
+                            && peer_tx.lock().await.write_all(&decoded.reply).await.is_err()
+                        {
+                            break;
+                        }
+                        if !decoded.data.is_empty() {
+                            if let Err(e) = deliver(&mut wire, &decoded.data, &port).await {
+                                tracing::warn!(error = %e, "port write failed");
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, "peer read failed");
+                        break;
+                    }
+                }
+            }
+        })
+    };
+
+    tokio::select! {
+        _ = &mut up => {
+            down.abort();
+            let _ = down.await;
+        }
+        _ = &mut down => {
+            up.abort();
+            let _ = up.await;
+        }
+    }
+}
+
+/// Relay whatever the consumer changed since `last`. Returns `false` when the
+/// peer is gone. Silent when nothing moved, so an idle port costs one
+/// `tcgetattr` per tick and no bytes.
+async fn sync_settings(
+    port: &VirtualPort,
+    last: &mut PortSettings,
+    com_ok: &AtomicBool,
+    peer_tx: &Mutex<OwnedWriteHalf>,
+) -> bool {
+    if !com_ok.load(Ordering::Relaxed) {
+        return true;
+    }
+    let Some(tio) = port.termios() else {
+        return true; // transient; the next tick tries again
+    };
+    let now = PortSettings::from_termios(&tio);
+    if now == *last {
+        return true;
+    }
+    let commands = last.commands_to(&now);
+    *last = now;
+    eprintln!("ttyforge: port reconfigured to {} — relaying", now.describe());
+    let mut w = peer_tx.lock().await;
+    for c in commands {
+        if w.write_all(&c).await.is_err() {
+            return false;
+        }
+    }
+    true
 }
 
 /// Read and discard while no peer is attached, so a local tool writing into a

@@ -115,7 +115,9 @@ enum Cmd {
     /// Create a virtual tty bridged to a TCP peer.
     ///
     /// `tcp://host:port` dials out; `listen://:port` waits for a connection.
-    /// Raw byte bridge first; RFC2217 (remote baud/DTR control) later.
+    /// The port outlives every peer: a drop means re-accept (listen) or
+    /// redial (tcp), never a closed path. Raw bytes by default, telnet
+    /// COM-PORT-OPTION with `--rfc2217`.
     Bridge {
         /// Peer: tcp://HOST:PORT (connect) or listen://[HOST]:PORT (accept).
         endpoint: String,
@@ -123,6 +125,13 @@ enum Cmd {
         /// (numbered -2, -3… if busy).
         #[arg(long, value_name = "PATH")]
         link: Option<String>,
+        /// Speak RFC2217 (telnet COM-PORT-OPTION) instead of raw bytes, so
+        /// the baud/parity/data/stop/flow a tool sets on the virtual port
+        /// retunes the *real* UART at the far end. For ser2net-style servers;
+        /// tcp:// only. DTR/RTS still cannot be forwarded — a pty has no
+        /// modem lines to observe.
+        #[arg(long)]
+        rfc2217: bool,
     },
     /// Fan one real serial port out to N virtual ttys.
     ///
@@ -161,7 +170,9 @@ fn main() -> ExitCode {
         match cli.cmd {
             Cmd::Pair { link } => forge::pair::run(link, wire).await,
             Cmd::Sim { preset, link, exec } => forge::sim::run(preset, link, exec, wire).await,
-            Cmd::Bridge { endpoint, link } => forge::bridge::run(endpoint, link, wire).await,
+            Cmd::Bridge { endpoint, link, rfc2217 } => {
+                forge::bridge::run(endpoint, link, rfc2217, wire).await
+            }
             Cmd::Mux { device, baud, link } => forge::mux::run(device, baud, link, wire).await,
         }
     });

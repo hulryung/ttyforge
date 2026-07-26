@@ -170,6 +170,24 @@ impl VirtualPort {
     /// (`ICANON`/`ECHO`, or `ICRNL`/`ONLCR` munging), reassert `cfmakeraw`
     /// and report `true`. Call on a ~500ms tick.
     pub fn reassert_raw_if_needed(&self) -> bool {
+        self.reassert(true)
+    }
+
+    /// Rule 5 for `bridge --rfc2217`: fix the line discipline, but leave the
+    /// `c_cflag` line parameters (speed, `CSIZE`, `PARENB`/`PARODD`,
+    /// `CSTOPB`, `CRTSCTS`) exactly as the consumer set them. Those are the
+    /// settings RFC2217 mode exists to relay to the far-end UART, and
+    /// `cfmakeraw` resets them to 8N1 — so a consumer that both cooks the
+    /// terminal *and* asks for 7O2 would silently lose the 7O2.
+    ///
+    /// Byte transparency is unaffected: a pty ignores `CSIZE` (a CS7 slave
+    /// still passes 0xFF through untouched), so these bits are inert locally
+    /// and meaningful only at the real UART on the other end.
+    pub fn reassert_line_discipline_if_needed(&self) -> bool {
+        self.reassert(false)
+    }
+
+    fn reassert(&self, reset_line_params: bool) -> bool {
         let fd = self.slave_keep.as_raw_fd();
         let mut tio: libc::termios = unsafe { std::mem::zeroed() };
         // SAFETY: slave fd is valid and open for the port's whole life.
@@ -182,9 +200,35 @@ impl VirtualPort {
         if !cooked {
             return false;
         }
+        // SAFETY: reads of an initialized termios we own.
+        let (cflag, ispeed, ospeed) = unsafe {
+            (tio.c_cflag, libc::cfgetispeed(&tio), libc::cfgetospeed(&tio))
+        };
         unsafe { libc::cfmakeraw(&mut tio) };
+        if !reset_line_params {
+            // Linux keeps the speed inside c_cflag, the BSDs in their own
+            // fields — restore both so this is one behavior on both.
+            tio.c_cflag = cflag;
+            // SAFETY: same initialized termios; speeds came from it.
+            unsafe {
+                libc::cfsetispeed(&mut tio, ispeed);
+                libc::cfsetospeed(&mut tio, ospeed);
+            }
+        }
         // SAFETY: same fd; termios now holds the raw settings we just built.
         unsafe { libc::tcsetattr(fd, libc::TCSANOW, &tio) == 0 }
+    }
+
+    /// Snapshot the slave's termios. A pty master gets no notification when
+    /// the slave is reconfigured, so polling this is how a consumer's
+    /// baud/parity/framing intent reaches the forge at all (see `rfc2217`).
+    pub fn termios(&self) -> Option<libc::termios> {
+        let mut tio: libc::termios = unsafe { std::mem::zeroed() };
+        // SAFETY: slave fd is valid and open for the port's whole life.
+        if unsafe { libc::tcgetattr(self.slave_keep.as_raw_fd(), &mut tio) } != 0 {
+            return None;
+        }
+        Some(tio)
     }
 
     /// The raw slave fd, for tests that inspect termios directly.
@@ -360,6 +404,42 @@ mod tests {
 
         assert!(port.reassert_raw_if_needed(), "should detect + fix cooked slave");
         assert!(!port.reassert_raw_if_needed(), "second check: already raw");
+    }
+
+    /// Rule 5 in RFC2217 mode: the line discipline is forced back to raw, but
+    /// the line parameters the far-end UART needs survive.
+    #[tokio::test]
+    async fn reassert_line_discipline_keeps_line_params() {
+        let (port, _name) = VirtualPort::create().expect("create");
+        let fd = port.slave_raw_fd();
+        let mut tio: libc::termios = unsafe { std::mem::zeroed() };
+        assert_eq!(unsafe { libc::tcgetattr(fd, &mut tio) }, 0);
+        // A consumer asking for 9600 7O2 — and cooking the terminal on the way.
+        unsafe {
+            libc::cfsetispeed(&mut tio, libc::B9600);
+            libc::cfsetospeed(&mut tio, libc::B9600);
+        }
+        tio.c_cflag = (tio.c_cflag & !libc::CSIZE)
+            | libc::CS7
+            | libc::PARENB
+            | libc::PARODD
+            | libc::CSTOPB;
+        tio.c_lflag |= libc::ICANON | libc::ECHO;
+        assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &tio) }, 0);
+
+        assert!(port.reassert_line_discipline_if_needed(), "cooked slave is fixed");
+        let after = port.termios().expect("termios");
+        assert_eq!(after.c_lflag & (libc::ICANON | libc::ECHO), 0, "raw again");
+        assert_eq!(after.c_cflag & libc::CSIZE, libc::CS7, "CS7 kept");
+        assert!(after.c_cflag & libc::PARODD != 0, "odd parity kept");
+        assert!(after.c_cflag & libc::CSTOPB != 0, "two stop bits kept");
+        assert_eq!(unsafe { libc::cfgetospeed(&after) }, libc::B9600, "speed kept");
+
+        // …while plain rule 5 resets them to 8N1, which is what pair/sim want.
+        assert_eq!(unsafe { libc::tcsetattr(fd, libc::TCSANOW, &tio) }, 0);
+        assert!(port.reassert_raw_if_needed());
+        let after = port.termios().expect("termios");
+        assert_eq!(after.c_cflag & libc::CSIZE, libc::CS8, "plain rule 5 → CS8");
     }
 
     #[test]

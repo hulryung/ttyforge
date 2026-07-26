@@ -188,9 +188,40 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
   병렬 테스트끼리 같은 포트를 받아 `AddrInUse` 로 20% 플레이크. 바인드한
   소켓에서 주소를 가져오거나(`:0`), 실패 시 재시도해야 한다
 
-### M4b — RFC2217 (미착수)
-- 가상 포트의 termios 변경 → telnet COM-PORT-OPTION, ser2net 상호운용 테스트
-- 착수 전 결정 필요: termios 폴링 vs TIOCPKT 이벤트 (§6)
+### M4b — RFC2217 ✅ (완료)
+- **결정: termios 폴링(A)** — TIOCPKT(B)는 master 의 read 포맷을 바꿔
+  `VirtualPort::read`(모든 forge 공유, 바이너리 투명성의 근거)에 per-read
+  접두 바이트 수술을 요구하는데, 그 대가로 사는 것이 지연 단축뿐이다.
+  게다가 B 도 "무엇이 바뀌었는지"는 결국 tcgetattr+diff 로 알아내야 하니
+  A 의 대체가 아니라 A 위의 최적화. 실측으로 확인한 전제: **macOS pty 는
+  baud/CSIZE/PARENB/CSTOPB/CRTSCTS 를 전부 저장**하고(폴링으로 관측 가능),
+  **CSIZE 는 무시**한다(CS7 에서도 0xFF 가 그대로 통과 → RFC2217 모드에서
+  c_cflag 를 보존해도 바이너리 투명성이 깨지지 않는다)
+- 지연 완화: 100ms 폴 + **데이터를 내보내기 직전 동기화**. 실제로 필요한
+  보장은 절대 지연이 아니라 순서("baud 변경이 그 뒤 바이트보다 먼저
+  도착")이고, 송신과 폴을 한 태스크의 select! 로 합쳐 그 순서를 구조적으로
+  보장한다
+- `src/forge/rfc2217.rs`: telnet 코덱(IAC 이스케이프/언이스케이프, 옵션
+  협상, subneg 파서) + termios→RFC2217 매핑. **speed_t 는 Linux 가 인덱스,
+  BSD/macOS 가 숫자 그대로**라 테이블 조회 후 실패 시 원값 사용 (macOS 의
+  임의 baud 도 처리)
+- rule 5 분리: `reassert_line_discipline_if_needed` — 소비자가 터미널을
+  cooked 로 만들면 라인 디시플린만 raw 로 되돌리고 c_cflag(속도/패리티/
+  프레이밍)는 보존. 기존 `reassert_raw_if_needed`(8N1 리셋)는 pair/sim 이
+  그대로 사용
+- 스트림 안전장치: 데이터 셀과 subneg 이 소켓 하나를 공유하므로 writer 를
+  Mutex 로 직렬화 — subneg 이 이스케이프된 청크 중간에 끼면 양방향이 깨진다
+- **수용 기준 통과** (제3자 구현 상호운용): pyserial 의 `serial.rfc2217.
+  PortManager` 서버 대상으로 9600 7O2 적용 확인 → 이후 115200 변경분만
+  재전송 확인 → 0xFF 다수 포함 페이로드 바이트 동일 왕복. 덤으로 그 서버가
+  독립적으로 재확인해 준 사실: pty 에 `TIOCMGET` 은 ENOTTY (모뎀 라인 부재)
+- **범위 밖**: DTR/RTS. 모뎀 라인은 termios 상태가 아니고 pty 에는 없다 —
+  소비자의 `TIOCMSET` 을 master 가 관측할 수 없으므로 SET-CONTROL 8..=12 는
+  로컬 트리거 자체가 없다 (§5 의 기존 제약과 동일)
+- 테스트 13개 (유닛 10: 이스케이프 왕복·모든 경계에서의 분할 디코딩·미지
+  옵션 거부와 ack 루프 방지·subneg 파라미터 이스케이프·termios 매핑·변경분만
+  전송·발신 명령 자기 디코딩 + rule 5 분리 / 통합 3: 설정 릴레이와 유휴 시
+  침묵과 변경분만, 바이너리 투명성, listen 모드 거부 exit 3)
 
 ### M5 — `mux`
 - ring buffer + 소비자별 cursor (tetherd/buffer.rs 패턴), TX 직렬화
@@ -213,8 +244,9 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
 
 ## 6. 리스크 / 열어둔 결정
 
-- **RFC2217 범위**: termios 폴링 vs TIOCPKT 이벤트 — M4b 착수 시 결정
-  (M4a 는 raw 바이트만 다루므로 이 결정 없이 완료됨).
+- ~~**RFC2217 범위**: termios 폴링 vs TIOCPKT 이벤트~~ → M4b 에서 폴링(A)
+  으로 결정·구현 완료. TIOCPKT 는 ^S/^Q 나 PURGE-DATA 가 실제로 필요해질
+  때, **RFC2217 모드에 한정해서만** 얹는다 (pair/sim 의 read 경로는 불변).
 - **tether TCP 상호운용**: `tetherd --tcp` 는 raw 시리얼이 아니라 NDJSON/
   JSON-RPC 2.0 + 토큰 인증이다. 붙이려면 `bridge` 가 아니라 별도의 "tether
   클라이언트 모드"(hello/attach/send + data 알림 언랩)가 필요하다 — 할지
