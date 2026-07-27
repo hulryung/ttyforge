@@ -25,6 +25,25 @@
 //! Out of scope, and not fixable here: DTR/RTS. Those are modem lines, not
 //! termios state, and a pty has none — a consumer's `TIOCMSET` is invisible
 //! to the master, so RFC2217's SET-CONTROL 8..=12 has no local trigger.
+//!
+//! **How much gets through depends on the platform's pty driver**, because a
+//! forge can only relay what it can observe. Linux normalises every
+//! `tcsetattr` on a pty with `c_cflag &= ~(CSIZE | PARENB); c_cflag |= CS8 |
+//! CREAD` (drivers/tty/pty.c), so two of the five settings cannot be
+//! expressed there at all:
+//!
+//! | setting      | macOS | Linux                       |
+//! |--------------|-------|-----------------------------|
+//! | baud rate    | yes   | yes                         |
+//! | stop bits    | yes   | yes                         |
+//! | flow control | yes   | yes                         |
+//! | data bits    | yes   | no — forced back to CS8     |
+//! | parity       | yes   | no — `PARENB` always cleared |
+//!
+//! Measured, not assumed: an Ubuntu 24.04 pty asked for 9600 7O2 with RTS/CTS
+//! reports back CS8, no `PARENB`, two stop bits, RTS/CTS and B9600. The
+//! integration test derives its expectations from that read-back rather than
+//! from what it asked for, so it states the truth on either system.
 
 // ── telnet (RFC 854) ──────────────────────────────────────────────────────
 const IAC: u8 = 255;

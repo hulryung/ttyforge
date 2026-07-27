@@ -119,5 +119,8 @@ tether; if you need a port that does not exist yet, use ttyforge.
   thing to a remote UART.
 - **DTR/RTS cannot be forwarded.** They are modem lines, and a pty has none to
   observe.
+- **`--rfc2217` relays less on Linux.** Its pty driver forces `CS8` and clears
+  parity on every `tcsetattr`, so data bits and parity never reach the forge to
+  be forwarded; baud, stop bits and flow control do. macOS keeps all five.
 
 MIT OR Apache-2.0.

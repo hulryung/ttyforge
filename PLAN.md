@@ -221,6 +221,14 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
 - **범위 밖**: DTR/RTS. 모뎀 라인은 termios 상태가 아니고 pty 에는 없다 —
   소비자의 `TIOCMSET` 을 master 가 관측할 수 없으므로 SET-CONTROL 8..=12 는
   로컬 트리거 자체가 없다 (§5 의 기존 제약과 동일)
+- **플랫폼별 도달 범위 (M6 CI 가 밝혀냄)**: forge 는 관측 가능한 것만
+  중계할 수 있는데, Linux pty 드라이버는 모든 tcsetattr 를
+  `c_cflag &= ~(CSIZE|PARENB); c_cflag |= CS8|CREAD` 로 정규화한다
+  (drivers/tty/pty.c). 따라서 **Linux 에서는 데이터 비트·패리티 중계 불가**
+  (baud/스톱비트/흐름제어는 가능), macOS 는 5종 전부 가능. 실측 확인:
+  Ubuntu 24.04 pty 에 9600 7O2 + RTS/CTS 를 걸면 CS8 / PARENB 없음 /
+  CSTOPB 유지 / CRTSCTS 유지 / B9600 유지로 되돌아온다. 통합 테스트는
+  요청값이 아니라 **read-back 값**에서 기대치를 도출하도록 수정
 - 테스트 13개 (유닛 10: 이스케이프 왕복·모든 경계에서의 분할 디코딩·미지
   옵션 거부와 ack 루프 방지·subneg 파라미터 이스케이프·termios 매핑·변경분만
   전송·발신 명령 자기 디코딩 + rule 5 분리 / 통합 3: 설정 릴레이와 유휴 시
