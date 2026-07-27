@@ -95,6 +95,18 @@ stream, not a share of it:
 ttyforge mux /dev/ttyUSB0 -b 115200 --link /tmp/monitor.pty --link /tmp/script.pty
 ```
 
+## Verifying it against other people's tools
+
+`cargo test` covers the logic. It cannot cover interop, because everything it
+talks to is also ours — so each milestone's acceptance check lives in
+[`scripts/acceptance/`](scripts/acceptance) with a third-party implementation
+on the other end of the wire: socat standing in for ser2net, pyserial's own
+RFC2217 server, pyserial as the terminal tool.
+
+```sh
+cargo build && scripts/acceptance/run-all.sh
+```
+
 ## Status
 
 **v0.1.0 released — every forge works.** `pair`, `sim`, `bridge` (raw TCP *and*
