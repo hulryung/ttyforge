@@ -1,0 +1,47 @@
+name: acceptance
+
+# Interop checks against implementations nobody here wrote — socat standing in
+# for ser2net, pyserial's own RFC2217 server, pyserial as the terminal tool.
+# Manual on purpose: they install extra tooling and measure real timing, so
+# `cargo test` is what guards every push and this is what you run before a
+# release, or when something on the other end of the wire changes.
+on: workflow_dispatch
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  acceptance:
+    name: acceptance (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install socat
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y socat
+          else
+            brew install socat
+          fi
+
+      - name: Install pyserial
+        # A venv, not `pip install --user`: both runner images now ship an
+        # externally-managed Python (PEP 668) that refuses to install into
+        # itself. Putting the venv on PATH keeps `python3` in the scripts.
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --quiet --upgrade pip
+          .venv/bin/python -m pip install --quiet pyserial
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+
+      - run: cargo build
+
+      - name: Run the acceptance scripts
+        run: scripts/acceptance/run-all.sh

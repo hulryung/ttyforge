@@ -17,8 +17,8 @@ need socat "stands in for ser2net"
 need_python serial "the terminal tool"
 
 port=$(free_port)
-board=$(mktemp -u /tmp/ttyforge-acc-board.XXXXXX.pty)
-local_pty=$(mktemp -u /tmp/ttyforge-acc-local.XXXXXX.pty)
+board=$(port_path board)
+local_pty=$(port_path local)
 cleanup() { kill ${SIM_PID:-} ${SOCAT_PID:-} ${BR_PID:-} 2>/dev/null || true; wait 2>/dev/null || true; }
 trap cleanup EXIT
 

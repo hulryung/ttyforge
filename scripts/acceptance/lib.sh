@@ -50,5 +50,10 @@ start_forge() {
   rm -f "$out"
 }
 
+# A unique path for a virtual port. Deliberately not mktemp: GNU mktemp
+# rejects a template whose X's are not last, and these paths want a .pty
+# suffix — it works on macOS and fails on Linux, which is the worst kind.
+port_path() { echo "/tmp/ttyforge-acc-$1-$$.pty"; }
+
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1" >&2; exit 1; }

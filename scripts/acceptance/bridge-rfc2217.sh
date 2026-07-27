@@ -18,7 +18,7 @@ require_forge
 need_python serial.rfc2217 "the third-party RFC2217 server"
 
 port=$(free_port)
-link=$(mktemp -u /tmp/ttyforge-acc-r2217.XXXXXX.pty)
+link=$(port_path r2217)
 log=$(mktemp)
 cleanup() { kill ${SRV_PID:-} ${BR_PID:-} 2>/dev/null || true; wait 2>/dev/null || true; rm -f "$log"; }
 trap cleanup EXIT

@@ -14,9 +14,9 @@
 require_forge
 need_python serial "the two consumers"
 
-board=$(mktemp -u /tmp/ttyforge-acc-board.XXXXXX.pty)
-mon=$(mktemp -u /tmp/ttyforge-acc-mon.XXXXXX.pty)
-scr=$(mktemp -u /tmp/ttyforge-acc-script.XXXXXX.pty)
+board=$(port_path board)
+mon=$(port_path mon)
+scr=$(port_path script)
 cleanup() { kill ${SIM_PID:-} ${MUX_PID:-} 2>/dev/null || true; wait 2>/dev/null || true; }
 trap cleanup EXIT
 
