@@ -53,8 +53,16 @@ invisible until two tools are attached at once; here a script drives the board
 on one port while a monitor watches on another, and the two must see byte-
 identical output, the driving tool's echo included.
 
-## Not wired into CI
+## In CI, on request
 
-They need `socat` and `pyserial` installed, and they measure real timing, so
-they are run by hand rather than on every push. `cargo test` is what guards
-each commit.
+They need `socat` and `pyserial` installed and they measure real timing, so
+they are not part of the per-push suite — `cargo test` is what guards each
+commit. A manual workflow runs them on both supported systems:
+
+```sh
+gh workflow run acceptance.yml      # or the "Run workflow" button in Actions
+```
+
+Worth a run before a release, or whenever something on the other end of the
+wire changes — that Linux leg is what catches the differences a macOS desk
+never shows you.
