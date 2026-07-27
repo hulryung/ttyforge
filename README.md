@@ -97,7 +97,7 @@ ttyforge mux /dev/ttyUSB0 -b 115200 --link /tmp/monitor.pty --link /tmp/script.p
 
 ## Status
 
-**M5 done — every forge works.** `pair`, `sim`, `bridge` (raw TCP *and*
+**v0.1.0 released — every forge works.** `pair`, `sim`, `bridge` (raw TCP *and*
 RFC2217), `mux`, and the wire model (`--baud-sim` / `--latency` / `--jitter` /
 `--drop` / `--corrupt` / `--seed`). ZMODEM survives a seeded lossy wire via
 retransmission; RFC2217 is verified against pyserial's RFC2217 server; the

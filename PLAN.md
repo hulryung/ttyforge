@@ -271,10 +271,34 @@ clap 서브커맨드 트리, 모듈 배치, 빌드 통과. 각 모듈 헤더에 
   TX 병합 무결성, 한 소비자의 재open 이 다른 소비자에 무영향, SIGTERM 전체
   정리, 잘못된 장치 exit 3)
 
-### M6 — 배포·마감
-- `--json` 상태 출력, README/예제, GitHub Actions CI (macOS+Linux),
-  homebrew-tap 등록 (기존 ~/dev/homebrew-tap 재사용), crates.io publish
-  (`ttyforge` 이름 확보 확인됨)
+### M6 — 배포·마감 ✅ (crates.io publish 만 남음)
+- `--json` readiness (`src/forge/status.rs`): 기존 "한 줄에 경로 하나" 계약은
+  바이트 단위로 그대로 두고, 그것으로 표현할 수 없는 것만 추가 — forge 이름,
+  pid, 그리고 **와이어 시드**. 확률 기능을 쓰면 시드가 자동 생성되는데
+  지금까지는 stderr 산문으로만 나갔다. 이제 하네스가 재현값을 기계적으로
+  집을 수 있다. 경로는 JSON writer 로 직렬화 (`--link` 경로는 임의 텍스트고,
+  손으로 이스케이프하는 순간 상태 출력이 거짓말을 시작한다)
+- CI (macOS + Linux): fmt / `clippy -D warnings` / 전체 테스트 + MSRV 1.85 +
+  `cargo publish --dry-run`. 포트 코어가 libc·termios 라 "컴파일된다"는
+  거의 아무것도 증명하지 못하므로, 테스트가 실바이너리로 실제 pty 를 몬다
+- rustfmt 도입(`use_small_heuristics = "Max"`), LICENSE-MIT/APACHE 추가,
+  crates.io 메타데이터(keywords/categories/readme/exclude), README 재작성
+  (설치 → readiness 프로토콜 → 레시피 5개 → 알아야 할 제약 3가지)
+- v0.1.0 태그 + GitHub 릴리스. homebrew: `Formula/ttyforge.rb` (소스 빌드,
+  테스트가 실제 pair 를 띄워 바이트 왕복 확인) →
+  `brew audit --strict --online` 통과, `brew test` 통과, 퍼블리시된 탭에서
+  `brew install hulryung/tap/ttyforge` 재설치까지 검증
+- **CI 가 즉시 값을 했다** (macOS 로컬에서는 보이지 않던 것들):
+  ① Linux 전용 clippy 2건 — `openpty` 의 termios 파라미터가 BSD 는 `*mut`,
+    Linux 는 `*const`; `speed_t` 가 Linux 는 u32, BSD 는 u64
+  ② **Linux pty 는 `tcsetattr` 을 정규화한다** (`c_cflag &= ~(CSIZE|PARENB);
+    c_cflag |= CS8|CREAD`, drivers/tty/pty.c) → RFC2217 이 Linux 에서는
+    데이터비트·패리티를 중계할 수 없다. 실제 러너에서 프로브로 확인하고
+    문서화했으며, 테스트는 요청값이 아니라 read-back 에서 기대치를 도출하도록
+    수정 (한 머신의 동작을 인코딩하지 않게)
+- 곁다리로 고친 pty 코어 버그: `ttyname_r` → `ptsname_r` (아래 참조)
+- **남은 것**: crates.io publish — 이 머신에 토큰이 없어 사용자가 실행해야
+  한다. `cargo login` 후 `cargo publish` (dry-run 은 CI 와 로컬 모두 통과)
 
 ## 5. 플랫폼·제약 (미리 못박는 것)
 
