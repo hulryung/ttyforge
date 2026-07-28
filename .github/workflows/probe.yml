@@ -29,15 +29,15 @@ jobs:
           echo "PROBE slave node perms:"
           sudo ls -l /dev/pts/0 /dev/pts/1 2>&1 | sed 's/^/PROBE slave: /'
           echo "PROBE non-root open (this is what a user's tio would do):"
-          python3 -c "
-import os
-try:
-    fd = os.open('/dev/ttyforge0', os.O_RDWR | os.O_NOCTTY)
-    print('PROBE non-root: opened fine')
-    os.close(fd)
-except OSError as e:
-    print('PROBE non-root: FAILED —', e)
-"
+          python3 - <<'PY2'
+          import os
+          try:
+              fd = os.open('/dev/ttyforge0', os.O_RDWR | os.O_NOCTTY)
+              print('PROBE non-root: opened fine')
+              os.close(fd)
+          except OSError as e:
+              print('PROBE non-root: FAILED —', e)
+          PY2
           sudo pkill -TERM -f 'ttyforge pair' || true
           sleep 1
           ls -l /dev/ttyforge0 2>&1 | sed 's/^/PROBE after teardown: /'
