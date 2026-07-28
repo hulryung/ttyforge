@@ -69,11 +69,21 @@ every run — which is the whole reason `--link` exists.
 `--link ~/board.pty`, `--link /usr/local/var/run/board.pty`. Under `/dev`,
 that depends on the system:
 
-- **Linux** — works as root, since `/dev` is a normal filesystem and this is
-  the same thing udev does for `/dev/serial/by-id/*`:
-  `sudo ttyforge pair --link /dev/ttyforge0 --link /dev/ttyforge1`.
+- **Linux** — works as root. `/dev` is an ordinary filesystem there, and this
+  is the same thing udev does for `/dev/serial/by-id/*`:
+
+  ```sh
+  sudo ttyforge pair --link /dev/ttyforge0 --link /dev/ttyforge1
+  ```
+
+  With a catch worth knowing first: the ports then belong to root
+  (`crw--w---- root tty`), so the tool at the other end needs root as well —
+  a plain `tio /dev/ttyforge0` gets `Permission denied`. Unless everything
+  involved already runs as root, a link somewhere you own is the simpler
+  answer.
+
 - **macOS** — not possible. `/dev` is devfs, which refuses to create entries
-  at all: as root, both `ln -s` and `touch` there fail with `EPERM` rather
+  at all: *as root*, both `ln -s` and `touch` there fail with `EPERM` rather
   than a permission error, and the only symlinks in `/dev` are the three the
   kernel makes at boot. Put the link anywhere else, or open `/dev/ttysNNN`
   directly.
