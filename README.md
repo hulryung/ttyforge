@@ -52,6 +52,38 @@ Ctrl-C or SIGTERM tears everything down and removes the symlinks. Exit codes:
 `0` clean, `1` usage, `2` runtime, `3` setup failed before the port existed —
 so a script that got a readiness line knows the port was real.
 
+## Where the ports live
+
+The path a forge publishes is a symlink; what it points at is already a real
+device node:
+
+```sh
+$ readlink /tmp/ttyforge-a.pty
+/dev/ttys019          # /dev/pts/3 on Linux
+```
+
+Tools may open either one. The node is the kernel's, and its number changes
+every run — which is the whole reason `--link` exists.
+
+`--link` takes any path, so a stable name can live wherever you want it:
+`--link ~/board.pty`, `--link /usr/local/var/run/board.pty`. Under `/dev`,
+that depends on the system:
+
+- **Linux** — works as root, since `/dev` is a normal filesystem and this is
+  the same thing udev does for `/dev/serial/by-id/*`:
+  `sudo ttyforge pair --link /dev/ttyforge0 --link /dev/ttyforge1`.
+- **macOS** — not possible. `/dev` is devfs, which refuses to create entries
+  at all: as root, both `ln -s` and `touch` there fail with `EPERM` rather
+  than a permission error, and the only symlinks in `/dev` are the three the
+  kernel makes at boot. Put the link anywhere else, or open `/dev/ttysNNN`
+  directly.
+
+A genuine macOS `cu.*` / `tty.*` pair is further out of reach: those two nodes
+are created together by an IOKit serial-family driver, so producing one means
+shipping a DriverKit driver or kext — the same kernel-driver territory that
+puts Windows virtual COM ports out of scope. A symlink named `cu.something`
+would carry the name without the semantics.
+
 ## Recipes
 
 **Test a serial app with no hardware.** One end for your code, one for a fake
@@ -131,6 +163,8 @@ tether; if you need a port that does not exist yet, use ttyforge.
   thing to a remote UART.
 - **DTR/RTS cannot be forwarded.** They are modem lines, and a pty has none to
   observe.
+- **No `/dev` name of your choosing on macOS**, and no real `cu.*`/`tty.*`
+  pair on any system — see [Where the ports live](#where-the-ports-live).
 - **`--rfc2217` relays less on Linux.** Its pty driver forces `CS8` and clears
   parity on every `tcsetattr`, so data bits and parity never reach the forge to
   be forwarded; baud, stop bits and flow control do. macOS keeps all five.
