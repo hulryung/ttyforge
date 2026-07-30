@@ -110,15 +110,22 @@ impl VirtualPort {
         // macOS `ttyname_r` resolves the name by looking the device up in
         // /dev, and *every* failure of that lookup is reported as ERANGE — a
         // "buffer too small" errno that has nothing to do with the buffer.
-        // Under concurrent pty creation that lookup fails constantly:
-        // measured here at 3648 ERANGEs in 4000 calls across ten processes,
-        // at every buffer size from 32 bytes to 4 KiB, while `ptsname_r` on
-        // the same ptys returned the identical names 4000/4000. It asks the
-        // kernel (TIOCPTYGNAME) instead of searching a directory.
+        // `ptsname_r` asks the kernel (TIOCPTYGNAME) for the answer instead,
+        // so it has no lookup that can fail this way.
         //
-        // This is not hypothetical for a tool whose whole job is forging
-        // ptys: a `mux` beside a `pair`, or a CI job running both, is exactly
-        // the workload that trips it.
+        // That is not theoretical. This machine spent an afternoon returning
+        // 3648 ERANGEs in 4000 `ttyname_r` calls, at every buffer size from
+        // 32 bytes to 4 KiB, while `ptsname_r` on the very same ptys returned
+        // identical names 4000/4000 — and flipping this one call back and
+        // forth made a test fail 5/5 and pass 5/5 accordingly.
+        //
+        // What provoked that state is *not* known. It has not reproduced
+        // since: concurrency, create/destroy churn, live-pty count up to 450,
+        // buffer size and machine load were each ruled out afterwards, and
+        // the original probe now comes back 4000/4000 clean. So the trigger
+        // is unidentified rather than understood — the call was changed
+        // because one of the two has a failure mode and the other does not,
+        // not because the conditions are charted.
         //
         // Needs macOS 10.13.4+ for `ptsname_r`; glibc and musl have long had
         // it. Both platforms yield a path under /dev.
@@ -489,15 +496,21 @@ mod tests {
         assert_eq!(after.c_cflag & libc::CSIZE, libc::CS8, "plain rule 5 → CS8");
     }
 
-    /// Regression: resolving the slave path must survive several threads
-    /// forging ports at once — `ttyforge mux` next to a `ttyforge pair`, or
-    /// one CI job doing both.
+    /// Resolving the slave path must survive several threads forging ports
+    /// at once — `ttyforge mux` next to a `ttyforge pair`, or one CI job
+    /// doing both.
+    ///
+    /// Written as a regression test for the `ttyname_r` ERANGE failure, and
+    /// it did fail 5/5 against that call at the time. It no longer
+    /// distinguishes the two: the state that provoked the failure has not
+    /// been reproducible since, so today this passes either way. Kept as a
+    /// smoke test — it costs nothing and is the shape that would break first
+    /// if the condition returns.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn slave_paths_resolve_under_concurrent_churn() {
-        // Concurrency is what reproduces the bug, not volume: ttyname_r failed
-        // ~90% of the time under it. Kept small on purpose — the system caps
-        // ptys (macOS: 511), and a greedier test starves the rest of the suite
-        // instead of testing anything.
+        // Kept small on purpose — the system caps ptys (macOS: 511), and a
+        // greedier test starves the rest of the suite instead of testing
+        // anything. An earlier 8x40 version did exactly that.
         let mut tasks = Vec::new();
         for _ in 0..4 {
             // Report rather than panic: a panicking blocking task tears the
